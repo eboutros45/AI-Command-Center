@@ -306,9 +306,40 @@ fn create_skill(
     category: String,
     name: String,
     description: String,
+    template: Option<String>,
 ) -> Result<Skill, String> {
     let root = canonical_dir(Path::new(&root))?;
     let category = safe_relative(&category)?;
+    create_skill_at(&root, &category, &name, &description, template.as_deref())
+}
+
+fn template_body(template: Option<&str>, name: &str) -> String {
+    match template.unwrap_or("general") {
+        "review" => format!(
+            "# {name}\n\n## When to use\n\nUse this skill when the user asks for a structured review.\n\n## Process\n\n1. Establish the goal and relevant constraints.\n2. Inspect the supplied material before drawing conclusions.\n3. Prioritize findings by impact and confidence.\n4. Cite concrete evidence for each finding.\n5. End with concise recommended next steps.\n\n## Output\n\nLead with actionable findings. Separate confirmed issues from suggestions.\n"
+        ),
+        "research" => format!(
+            "# {name}\n\n## When to use\n\nUse this skill when the user needs evidence gathered and synthesized.\n\n## Process\n\n1. Restate the research question and scope.\n2. Prefer primary and current sources.\n3. Record claims with their supporting sources.\n4. Reconcile conflicts and call out uncertainty.\n5. Summarize the answer and remaining gaps.\n\n## Output\n\nProvide a concise synthesis, key evidence, sources, and open questions.\n"
+        ),
+        "planning" => format!(
+            "# {name}\n\n## When to use\n\nUse this skill when a goal needs to become an executable plan.\n\n## Process\n\n1. Confirm the desired outcome and constraints.\n2. Identify dependencies, risks, and unknowns.\n3. Break work into verifiable milestones.\n4. Define acceptance checks for each milestone.\n5. Highlight decisions requiring human approval.\n\n## Output\n\nReturn an ordered plan with outcomes, checks, risks, and decisions.\n"
+        ),
+        "skill-creator" => format!(
+            "# {name}\n\n## Purpose\n\nHelp create or improve portable AI skills that follow the Agent Skills format.\n\n## Process\n\n1. Clarify the capability, trigger conditions, and expected outcome.\n2. Keep `SKILL.md` focused; place detailed material in supporting files.\n3. Write a precise description that tells Claude when to use the skill.\n4. Use imperative, testable instructions and explicit output requirements.\n5. Validate frontmatter, relative references, and portability before publishing.\n\n## Quality checklist\n\n- The description states what the skill does and when to use it.\n- Instructions contain no hidden assumptions or environment-specific paths.\n- Scripts are never executed during inspection or import.\n- Examples and references are included only when they improve reliability.\n"
+        ),
+        _ => format!(
+            "# {name}\n\n## When to use\n\nDescribe the requests and situations that should activate this skill.\n\n## Instructions\n\n1. Confirm the desired outcome and relevant constraints.\n2. Follow a clear, repeatable process.\n3. Verify the result before responding.\n\n## Output\n\nDescribe the expected response format and quality bar.\n"
+        ),
+    }
+}
+
+fn create_skill_at(
+    root: &Path,
+    category: &Path,
+    name: &str,
+    description: &str,
+    template: Option<&str>,
+) -> Result<Skill, String> {
     let folder = slug(&name)?;
     let destination = root.join(category).join(&folder);
     if destination.exists() {
@@ -317,8 +348,58 @@ fn create_skill(
     fs::create_dir(&destination).map_err(err)?;
     let safe_name = name.replace(['\n', '\r'], " ");
     let safe_description = description.replace(['\n', '\r'], " ");
-    fs::write(destination.join("SKILL.md"), format!("---\nname: {}\ndescription: {}\n---\n\n# {}\n\nDescribe when and how Claude should use this skill.\n", safe_name, safe_description, safe_name)).map_err(err)?;
+    let body = template_body(template, &safe_name);
+    fs::write(
+        destination.join("SKILL.md"),
+        format!(
+            "---\nname: {}\ndescription: {}\n---\n\n{}",
+            safe_name, safe_description, body
+        ),
+    )
+    .map_err(err)?;
     Ok(inspect(&root, &destination))
+}
+
+#[tauri::command]
+fn seed_starter_skills(root: String) -> Result<Vec<Skill>, String> {
+    let root = canonical_dir(Path::new(&root))?;
+    let category = Path::new("starter-skills");
+    fs::create_dir_all(root.join(category)).map_err(err)?;
+    let starters = [
+        (
+            "Skill Creator",
+            "Creates and improves portable AI skills. Use when defining a reusable capability or refining SKILL.md instructions.",
+            "skill-creator",
+        ),
+        (
+            "Code Review",
+            "Reviews code for correctness, security, maintainability, and missing tests. Use when the user requests review feedback.",
+            "review",
+        ),
+        (
+            "Research Synthesizer",
+            "Researches a question and produces an evidence-based synthesis with sources and uncertainty noted.",
+            "research",
+        ),
+        (
+            "Project Planner",
+            "Turns a goal into a sequenced, verifiable implementation plan with risks and approval decisions.",
+            "planning",
+        ),
+    ];
+    let mut created = Vec::new();
+    for (name, description, template) in starters {
+        if !root.join(category).join(slug(name)?).exists() {
+            created.push(create_skill_at(
+                &root,
+                category,
+                name,
+                description,
+                Some(template),
+            )?);
+        }
+    }
+    Ok(created)
 }
 
 fn copy_dir(source: &Path, destination: &Path) -> Result<(), String> {
@@ -494,6 +575,7 @@ pub fn run() {
             save_skill,
             create_category,
             create_skill,
+            seed_starter_skills,
             import_skill,
             export_skill_zip,
             install_skill,

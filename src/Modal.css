@@ -19,7 +19,7 @@
 .modal h2 { margin: 5px 0; font: 600 24px Georgia, serif; }
 .modal > p { margin: 0 0 20px; color: var(--muted); font-size: 12px; }
 .modal label { display: block; margin-top: 14px; color: var(--ink); font-size: 12px; font-weight: 650; }
-.modal input, .modal textarea {
+.modal input, .modal textarea, .modal select {
   display: block;
   width: 100%;
   margin-top: 7px;
@@ -32,5 +32,6 @@
   font: 13px/1.5 inherit;
 }
 .modal textarea { resize: vertical; }
-.modal input:focus, .modal textarea:focus { border-color: #82a99b; box-shadow: 0 0 0 3px #e9f2ee; }
+.modal input:focus, .modal textarea:focus, .modal select:focus { border-color: #82a99b; box-shadow: 0 0 0 3px #e9f2ee; }
+.modal .field-help { margin: 7px 0 0; color: var(--muted); font-size: 11px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 22px; }
