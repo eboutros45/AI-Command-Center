@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { open, save } from '@tauri-apps/plugin-dialog'
+import { save } from '@tauri-apps/plugin-dialog'
 import './App.css'
 
 type Status = 'valid' | 'invalid'
@@ -19,6 +19,11 @@ function App() {
   const [notice, setNotice] = useState(() => isTauri() ? 'Choose a folder to begin.' : 'Run with “npm run tauri dev” to access local folders.')
   const [busy, setBusy] = useState(false)
 
+  const chooseDirectory = async (title: string) => {
+    try { return await invoke<string | null>('choose_directory', { title }) }
+    catch (error) { setNotice(`Folder picker failed: ${String(error)}`); return null }
+  }
+
   const refresh = async (root = library?.root) => {
     if (!root || !isTauri()) return
     setBusy(true)
@@ -32,7 +37,11 @@ function App() {
     const root = localStorage.getItem('libraryRoot')
     if (root && isTauri()) queueMicrotask(() => void refresh(root))
   }, [])
-  const chooseRoot = async () => { const path = await open({ directory: true, multiple: false, title: 'Choose Skills Library' }); if (typeof path === 'string') await refresh(path) }
+  const chooseRoot = async () => {
+    setNotice('Opening folder picker…')
+    const path = await chooseDirectory('Choose Skills Library')
+    if (path) await refresh(path); else setNotice('No folder selected.')
+  }
   const loadSkill = async (skill: Skill) => {
     if (selected && draft !== selected.content && !confirm('Discard your unsaved changes?')) return
     try { const doc = await invoke<SkillDocument>('read_skill', { root: library!.root, skillPath: skill.path }); setSelected(doc); setDraft(doc.content); setNotice('Skill loaded from disk.') } catch (error) { setNotice(String(error)) }
@@ -50,7 +59,7 @@ function App() {
     try { const skill = await invoke<Skill>('create_skill', { root: library.root, category: selectedCategory, name, description }); await refresh(); await loadSkill(skill) } catch (error) { setNotice(String(error)) }
   }
   const importSkill = async () => {
-    if (!library) return; const source = await open({ directory: true, multiple: false, title: 'Choose a skill folder' }); if (typeof source !== 'string') return
+    if (!library) return; const source = await chooseDirectory('Choose a skill folder'); if (!source) return
     try { await invoke('import_skill', { root: library.root, category: selectedCategory, source }); await refresh() } catch (error) { setNotice(String(error)) }
   }
   const exportZip = async () => {
@@ -59,7 +68,7 @@ function App() {
   }
   const install = async (scope: 'personal' | 'project') => {
     if (!selected || !library) return; let projectRoot: string | null = null
-    if (scope === 'project') { const path = await open({ directory: true, multiple: false, title: 'Choose Claude project' }); if (typeof path !== 'string') return; projectRoot = path }
+    if (scope === 'project') { const path = await chooseDirectory('Choose Claude project'); if (!path) return; projectRoot = path }
     if (!confirm(`Install “${selected.name}” to Claude Code (${scope}) using a symlink?`)) return
     try { const path = await invoke<string>('install_skill', { root: library.root, skillPath: selected.path, scope, projectRoot }); setNotice(`Installed locally at ${path}`) } catch (error) { setNotice(String(error)) }
   }
