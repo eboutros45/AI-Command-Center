@@ -2,12 +2,14 @@ import { useEffect, useMemo, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { save } from '@tauri-apps/plugin-dialog'
 import './App.css'
+import './Modal.css'
 
 type Status = 'valid' | 'invalid'
 type Skill = { name: string; description: string; path: string; relativePath: string; modified: number; status: Status; errors: string[] }
 type Category = { name: string; path: string; relativePath: string; children: Category[] }
 type Library = { root: string; categories: Category[]; skills: Skill[] }
 type SkillDocument = Skill & { content: string; fingerprint: string; files: string[] }
+type CreationDialog = 'skill' | 'folder' | null
 const isTauri = () => '__TAURI_INTERNALS__' in window
 
 function App() {
@@ -18,6 +20,9 @@ function App() {
   const [query, setQuery] = useState('')
   const [notice, setNotice] = useState(() => isTauri() ? 'Choose a folder to begin.' : 'Run with “npm run tauri dev” to access local folders.')
   const [busy, setBusy] = useState(false)
+  const [creationDialog, setCreationDialog] = useState<CreationDialog>(null)
+  const [creationName, setCreationName] = useState('')
+  const [creationDescription, setCreationDescription] = useState('')
 
   const chooseDirectory = async (title: string) => {
     try { return await invoke<string | null>('choose_directory', { title }) }
@@ -50,13 +55,22 @@ function App() {
     if (!selected || !library) return
     try { const doc = await invoke<SkillDocument>('save_skill', { root: library.root, skillPath: selected.path, content: draft, expectedFingerprint: selected.fingerprint }); setSelected(doc); setDraft(doc.content); setNotice('Saved to SKILL.md.'); await refresh() } catch (error) { setNotice(String(error)) }
   }
-  const newFolder = async () => {
-    if (!library) return; const name = prompt('Folder name')?.trim(); if (!name) return
-    try { await invoke('create_category', { root: library.root, parent: selectedCategory, name }); await refresh() } catch (error) { setNotice(String(error)) }
+  const openCreationDialog = (type: Exclude<CreationDialog, null>) => {
+    setCreationName(''); setCreationDescription(''); setCreationDialog(type)
   }
-  const newSkill = async () => {
-    if (!library) return; const name = prompt('Skill name')?.trim(); if (!name) return; const description = prompt('Description')?.trim(); if (!description) return
-    try { const skill = await invoke<Skill>('create_skill', { root: library.root, category: selectedCategory, name, description }); await refresh(); await loadSkill(skill) } catch (error) { setNotice(String(error)) }
+  const createItem = async (event: React.FormEvent) => {
+    event.preventDefault(); if (!library || !creationDialog) return
+    const name = creationName.trim(); const description = creationDescription.trim(); if (!name || (creationDialog === 'skill' && !description)) return
+    setBusy(true)
+    try {
+      if (creationDialog === 'folder') {
+        await invoke('create_category', { root: library.root, parent: selectedCategory, name }); setNotice(`Created folder “${name}”.`)
+      } else {
+        const skill = await invoke<Skill>('create_skill', { root: library.root, category: selectedCategory, name, description })
+        setNotice(`Created skill “${name}”.`); setCreationDialog(null); await refresh(); await loadSkill(skill); return
+      }
+      setCreationDialog(null); await refresh()
+    } catch (error) { setNotice(String(error)) } finally { setBusy(false) }
   }
   const importSkill = async () => {
     if (!library) return; const source = await chooseDirectory('Choose a skill folder'); if (!source) return
@@ -78,13 +92,14 @@ function App() {
 
   return <main className="app-shell">
     <header><div className="brand"><span className="mark">AI</span><div><h1>Command Center</h1><p>Skills Library</p></div></div><div className="header-actions"><button onClick={chooseRoot}>{library ? 'Change Library' : 'Choose Library'}</button><button onClick={() => refresh()} disabled={!library || busy}>↻ Refresh</button></div></header>
-    <section className="toolbar"><button className="primary" onClick={newSkill} disabled={!library}>＋ New Skill</button><button onClick={newFolder} disabled={!library}>New Folder</button><button onClick={importSkill} disabled={!library}>Import Skill</button><button onClick={reveal} disabled={!library}>Reveal in Finder</button><input aria-label="Search skills" placeholder="Search skills…" value={query} onChange={event => setQuery(event.target.value)} /></section>
+    <section className="toolbar"><button className="primary" onClick={() => openCreationDialog('skill')} disabled={!library}>＋ New Skill</button><button onClick={() => openCreationDialog('folder')} disabled={!library}>New Folder</button><button onClick={importSkill} disabled={!library}>Import Skill</button><button onClick={reveal} disabled={!library}>Reveal in Finder</button><input aria-label="Search skills" placeholder="Search skills…" value={query} onChange={event => setQuery(event.target.value)} /></section>
     <section className="workspace">
       <aside className="folders"><div className="pane-title">Library</div><button className={`tree-item ${selectedCategory === '' ? 'active' : ''}`} onClick={() => setSelectedCategory('')}><span>⌄</span> All Skills</button>{renderCategories(library?.categories ?? [])}<div className="root-path">{library?.root ?? 'No library selected'}</div></aside>
       <aside className="skills"><div className="pane-title"><span>Skills</span><span>{filtered.length}</span></div>{filtered.map((skill, index) => <button key={skill.path} className={`skill-card ${selected?.path === skill.path ? 'selected' : ''}`} style={{ '--deal-index': index } as React.CSSProperties} onClick={() => loadSkill(skill)}><div><strong>{skill.name}</strong><span className={`status ${skill.status}`}>{skill.status}</span></div><p>{skill.description || skill.errors[0]}</p><small>{skill.relativePath}</small></button>)}{library && !filtered.length && <div className="empty">No skills here yet.</div>}</aside>
       <article className="editor">{selected ? <><div className="editor-head"><div><div className="eyebrow">SKILL.md</div><h2>{selected.name}</h2><p>{selected.path}</p></div><span className={`status ${selected.status}`}>{selected.status}</span></div>{selected.errors.length > 0 && <div className="validation"><strong>Validation</strong>{selected.errors.map(error => <div key={error}>• {error}</div>)}</div>}<textarea aria-label="Skill instructions" value={draft} onChange={event => setDraft(event.target.value)} spellCheck={false} /><div className="editor-actions"><span>{draft !== selected.content ? 'Unsaved changes' : `${selected.files.length} bundled file${selected.files.length === 1 ? '' : 's'}`}</span><button className="primary" disabled={draft === selected.content} onClick={saveSkill}>Save</button></div><div className="publish"><h3>Publish for Claude</h3><p>Install a reversible local symlink or export a ZIP for manual account upload.</p><div><button onClick={() => install('personal')} disabled={selected.status !== 'valid'}>Install Personal</button><button onClick={() => install('project')} disabled={selected.status !== 'valid'}>Install to Project…</button><button onClick={exportZip} disabled={selected.status !== 'valid'}>Export ZIP…</button></div></div></> : <div className="welcome"><div className="welcome-icon">⌘</div><h2>{library ? 'Select a skill' : 'Your skills, on your disk'}</h2><p>{library ? 'Choose a skill to inspect and edit its SKILL.md.' : 'Choose a local folder. AI Command Center keeps ordinary, portable skill packages as the source of truth.'}</p>{!library && <button className="primary" onClick={chooseRoot}>Choose Skills Library</button>}</div>}</article>
     </section>
-    <footer><span className={busy ? 'pulse' : ''}>{busy ? 'Scanning…' : notice}</span><span>Local-first · Filesystem source of truth</span></footer>
+    {creationDialog && <div className="modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setCreationDialog(null) }}><form className="modal" onSubmit={createItem}><div className="eyebrow">{creationDialog === 'skill' ? 'New portable skill' : 'New category'}</div><h2>{creationDialog === 'skill' ? 'Create a skill' : 'Create a folder'}</h2><p>Location: {selectedCategory || 'Library root'}</p><label>Name<input autoFocus value={creationName} onChange={event => setCreationName(event.target.value)} placeholder={creationDialog === 'skill' ? 'Code reviewer' : 'Development'} /></label>{creationDialog === 'skill' && <label>Description<textarea value={creationDescription} onChange={event => setCreationDescription(event.target.value)} placeholder="When should Claude use this skill?" rows={4} /></label>}<div className="modal-actions"><button type="button" onClick={() => setCreationDialog(null)}>Cancel</button><button className="primary" type="submit" disabled={!creationName.trim() || (creationDialog === 'skill' && !creationDescription.trim()) || busy}>{busy ? 'Creating…' : 'Create'}</button></div></form></div>}
+    <footer><span className={busy ? 'pulse' : ''}>{busy ? 'Working…' : notice}</span><span>Local-first · Filesystem source of truth</span></footer>
   </main>
 }
 export default App

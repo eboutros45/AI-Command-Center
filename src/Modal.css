@@ -1,0 +1,36 @@
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  background: rgba(17, 27, 24, 0.42);
+  backdrop-filter: blur(3px);
+  animation: appear 0.15s ease-out;
+}
+.modal {
+  width: min(460px, calc(100vw - 40px));
+  padding: 24px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(14, 31, 26, 0.22);
+}
+.modal h2 { margin: 5px 0; font: 600 24px Georgia, serif; }
+.modal > p { margin: 0 0 20px; color: var(--muted); font-size: 12px; }
+.modal label { display: block; margin-top: 14px; color: var(--ink); font-size: 12px; font-weight: 650; }
+.modal input, .modal textarea {
+  display: block;
+  width: 100%;
+  margin-top: 7px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  outline: none;
+  background: #fbfcfb;
+  color: var(--ink);
+  font: 13px/1.5 inherit;
+}
+.modal textarea { resize: vertical; }
+.modal input:focus, .modal textarea:focus { border-color: #82a99b; box-shadow: 0 0 0 3px #e9f2ee; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 22px; }
