@@ -20,6 +20,10 @@ npm test
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
+### Windows prerequisites
+
+Install Git, Node.js LTS, Rust with the MSVC toolchain, Microsoft C++ Build Tools (`Desktop development with C++`), and WebView2. Windows 10 version 1803+ and Windows 11 normally include WebView2. Enable Windows Developer Mode if you want Command Center to install skills as filesystem links without running as administrator.
+
 ## Current capabilities
 
 - Choose one local library root and browse its physical folder hierarchy.

@@ -942,6 +942,52 @@ fn install_skill(
     Ok(destination.to_string_lossy().into())
 }
 
+#[cfg(windows)]
+#[tauri::command]
+fn install_skill(
+    root: String,
+    skill_path: String,
+    scope: String,
+    project_root: Option<String>,
+) -> Result<String, String> {
+    use std::os::windows::fs::symlink_dir;
+    let root = canonical_dir(Path::new(&root))?;
+    let skill = within(&root, Path::new(&skill_path))?;
+    if inspect(&root, &skill).status != "valid" {
+        return Err("Fix validation errors before installing".into());
+    }
+    let base = match scope.as_str() {
+        "personal" => dirs::home_dir()
+            .ok_or("Home folder is unavailable")?
+            .join(".claude/skills"),
+        "project" => canonical_dir(Path::new(
+            project_root.as_deref().ok_or("Choose a project folder")?,
+        ))?
+        .join(".claude/skills"),
+        _ => return Err("Unknown installation scope".into()),
+    };
+    fs::create_dir_all(&base).map_err(err)?;
+    let folder = skill.file_name().ok_or("Skill folder has no name")?;
+    let destination = base.join(folder);
+    if destination.exists() || destination.symlink_metadata().is_ok() {
+        return Err(format!(
+            "Installation target already exists: {}",
+            destination.display()
+        ));
+    }
+    symlink_dir(&skill, &destination).map_err(|error| {
+        format!(
+            "Could not create the Windows skill link: {error}. Enable Windows Developer Mode or run Command Center with permission to create symbolic links."
+        )
+    })?;
+    let target = fs::read_link(&destination).map_err(err)?;
+    if target != skill {
+        let _ = fs::remove_dir(&destination);
+        return Err("Could not verify installed Windows skill link".into());
+    }
+    Ok(destination.to_string_lossy().into_owned())
+}
+
 #[tauri::command]
 fn reveal_in_file_manager(path: String) -> Result<(), String> {
     let path = PathBuf::from(path);
