@@ -93,6 +93,8 @@ header { justify-content: space-between; gap: 18px; padding: 0 20px; }
   background: #fafbf9;
 }
 .toolbar input:focus { border-color: #78a696; box-shadow: 0 0 0 3px #e9f2ee; }
+.confirm-modal input { width: 100%; margin-top: 4px; padding: 9px 10px; border: 1px solid var(--line-strong); border-radius: 7px; outline: none; }
+.confirm-modal input:focus { border-color: #78a696; box-shadow: 0 0 0 3px #e9f2ee; }
 
 .workspace { display: grid; grid-template-columns: 215px 300px minmax(0, 1fr); min-height: 0; }
 .workspace > aside { min-width: 0; overflow: auto; border-right: 1px solid var(--line); background: #fafbf9; }

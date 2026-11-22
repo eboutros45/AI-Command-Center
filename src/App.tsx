@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState, type CSSProperties, type FormEvent } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { save } from '@tauri-apps/plugin-dialog'
 import { evaluateSource } from './domain/quality'
 import './App.css'
 import './Modal.css'
@@ -85,17 +84,10 @@ function App() {
   const [agentTools, setAgentTools] = useState<string[]>(['Read', 'Grep', 'Glob'])
   const [agentSkills, setAgentSkills] = useState<string[]>([])
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null)
+  const [libraryPathDialog, setLibraryPathDialog] = useState(false)
+  const [libraryPath, setLibraryPath] = useState('')
 
   const isDirty = Boolean(selected && draft !== selected.document.content)
-
-  const chooseDirectory = async (title: string) => {
-    try {
-      return await invoke<string | null>('choose_directory', { title })
-    } catch (error) {
-      setNotice(`Folder picker failed: ${String(error)}`)
-      return undefined
-    }
-  }
 
   const refresh = async (root = library?.root) => {
     if (!root || !isTauri()) return
@@ -126,18 +118,26 @@ function App() {
   }
 
   const chooseRoot = async () => {
-    const perform = async () => {
-      setNotice('Opening folder picker…')
-      const path = await chooseDirectory('Choose Capability Library')
-      if (path) {
-        setSelected(null)
-        setDraft('')
-        await refresh(path)
-      } else if (path === null) setNotice('No folder selected.')
+    const perform = () => {
+      setLibraryPath(library?.root ?? '')
+      setLibraryPathDialog(true)
     }
     if (isDirty) {
       askConfirmation({ title: 'Leave unsaved changes?', body: 'Changing libraries will discard the current editor draft.', confirmLabel: 'Discard and continue', tone: 'danger', action: perform })
     } else await perform()
+  }
+
+  const loadLibraryPath = async (event: FormEvent) => {
+    event.preventDefault()
+    const path = libraryPath.trim()
+    if (!path) {
+      setNotice('Enter the full path to an existing library folder.')
+      return
+    }
+    setLibraryPathDialog(false)
+    setSelected(null)
+    setDraft('')
+    await refresh(path)
   }
 
   const loadAsset = async (assetKind: AssetKind, asset: AssetSummary) => {
@@ -279,20 +279,12 @@ function App() {
 
   const importSkill = async () => {
     if (!library) return
-    const source = await chooseDirectory('Choose a skill folder')
-    if (!source) return
-    try {
-      await invoke('import_skill', { root: library.root, category: selectedCategory, source })
-      await refresh()
-    } catch (error) {
-      setNotice(String(error))
-    }
+    setNotice('Import is temporarily unavailable while native dialogs are disabled on this Windows setup.')
   }
 
   const exportZip = async () => {
     if (!selected || selected.kind !== 'skills' || !library) return
-    const destination = await save({ title: 'Export Claude-compatible ZIP', defaultPath: `${selected.document.name}.zip`, filters: [{ name: 'ZIP archive', extensions: ['zip'] }] })
-    if (!destination) return
+    const destination = `${library.root}\\${selected.document.name}.zip`
     try {
       await invoke('export_skill_zip', { root: library.root, skillPath: selected.document.path, destination })
       setNotice('ZIP exported for manual Claude upload.')
@@ -305,9 +297,8 @@ function App() {
     if (!selected || !library) return
     let projectRoot: string | null = null
     if (scope === 'project') {
-      const selectedProject = await chooseDirectory('Choose Claude project')
-      if (typeof selectedProject !== 'string') return
-      projectRoot = selectedProject
+      setNotice('Project installation is temporarily unavailable while native dialogs are disabled on this Windows setup.')
+      return
     }
     const assetLabel = selected.kind === 'skills' ? 'skill' : 'agent'
     askConfirmation({
@@ -476,6 +467,16 @@ function App() {
           </>}
           {creationDialog !== 'folder' && <p className="field-help">Generates readable, editable Markdown. Nothing is executed and no provider is contacted.</p>}
           <div className="modal-actions"><button type="button" onClick={() => setCreationDialog(null)}>Cancel</button><button className="primary" type="submit" disabled={!creationName.trim() || (creationDialog !== 'folder' && !creationDescription.trim()) || busy}>{busy ? 'Creating…' : `Create ${creationDialog === 'agent' ? 'Agent' : creationDialog === 'skill' ? 'Skill' : 'Folder'}`}</button></div>
+        </form>
+      </div>}
+
+      {libraryPathDialog && <div className="modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setLibraryPathDialog(false) }}>
+        <form className="modal confirm-modal" role="dialog" aria-modal="true" aria-labelledby="library-path-title" onSubmit={loadLibraryPath}>
+          <div className="eyebrow">Local filesystem</div>
+          <h2 id="library-path-title">Open a skills library</h2>
+          <p>Enter an existing folder path. This folder remains the source of truth for your skills and agents.</p>
+          <input autoFocus value={libraryPath} onChange={event => setLibraryPath(event.target.value)} placeholder="F:\\AI Command Center\\My Skills" />
+          <div className="modal-actions"><button type="button" onClick={() => setLibraryPathDialog(false)}>Cancel</button><button className="primary" type="submit">Open library</button></div>
         </form>
       </div>}
 

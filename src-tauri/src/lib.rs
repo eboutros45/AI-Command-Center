@@ -7,7 +7,6 @@ use std::{
     path::{Component, Path, PathBuf},
     time::UNIX_EPOCH,
 };
-use tauri_plugin_dialog::DialogExt;
 use walkdir::WalkDir;
 
 #[derive(Serialize, Clone)]
@@ -138,27 +137,6 @@ fn err(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
-#[tauri::command]
-async fn choose_directory(app: tauri::AppHandle, title: String) -> Result<Option<String>, String> {
-    let (sender, mut receiver) = tauri::async_runtime::channel(1);
-    app.dialog()
-        .file()
-        .set_title(title)
-        .pick_folder(move |selected| {
-            let _ = sender.try_send(selected);
-        });
-    let selected = receiver
-        .recv()
-        .await
-        .ok_or("Folder picker closed before a selection was returned")?;
-    selected
-        .map(|path| {
-            path.into_path()
-                .map(|path| path.to_string_lossy().into_owned())
-                .map_err(err)
-        })
-        .transpose()
-}
 fn canonical_dir(path: &Path) -> Result<PathBuf, String> {
     if !path.is_dir() {
         return Err(format!("Folder is unavailable: {}", path.display()));
@@ -1128,9 +1106,7 @@ fn reveal_in_file_manager(path: String) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            choose_directory,
             scan_library,
             read_skill,
             save_skill,
