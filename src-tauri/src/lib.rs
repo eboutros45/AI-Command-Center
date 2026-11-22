@@ -721,6 +721,101 @@ fn create_agent(
     Ok(inspect_agent(&agent_root, &destination))
 }
 
+fn create_agent_at(
+    root: &Path,
+    category: &Path,
+    name: &str,
+    description: &str,
+    model: &str,
+    tools: &[&str],
+    skills: &[&str],
+    template: &str,
+) -> Result<AgentSummary, String> {
+    let agent_root = root.join("agents");
+    fs::create_dir_all(&agent_root).map_err(err)?;
+    let agent_root = canonical_dir(&agent_root)?;
+    let parent = agent_root.join(category);
+    fs::create_dir_all(&parent).map_err(err)?;
+    let parent = canonical_dir(&parent)?;
+    if !parent.starts_with(&agent_root) {
+        return Err("Agent category resolves outside the library".into());
+    }
+    let destination = parent.join(format!("{}.md", slug(name)?));
+    if destination.exists() {
+        return Err("An agent with that filename already exists".into());
+    }
+    let frontmatter = AgentFrontmatter {
+        name: Some(name.into()),
+        description: Some(description.into()),
+        model: Some(model.into()),
+        tools: tools.iter().map(|value| (*value).into()).collect(),
+        skills: skills.iter().map(|value| (*value).into()).collect(),
+    };
+    let yaml = serde_yaml::to_string(&frontmatter)
+        .map_err(|error| format!("Could not serialize agent frontmatter: {error}"))?;
+    fs::write(
+        &destination,
+        format!(
+            "---\n{yaml}---\n\n{}",
+            agent_template_body(Some(template), name)
+        ),
+    )
+    .map_err(err)?;
+    Ok(inspect_agent(&agent_root, &destination))
+}
+
+#[tauri::command]
+fn seed_starter_agents(root: String) -> Result<Vec<AgentSummary>, String> {
+    let root = canonical_dir(Path::new(&root))?;
+    let starters = [
+        (
+            "Code Investigator",
+            "Investigates code issues, traces root causes, and recommends verified fixes. Use when a bug or unexpected behavior needs diagnosis.",
+            "sonnet",
+            &["Read", "Grep", "Glob"] as &[&str],
+            &["Code Review"] as &[&str],
+            "reviewer",
+        ),
+        (
+            "Research Lead",
+            "Researches questions with evidence, reconciles conflicting claims, and communicates confidence. Use when a decision needs reliable sources.",
+            "sonnet",
+            &["Read", "Grep", "Glob", "WebSearch", "WebFetch"] as &[&str],
+            &["Research Synthesizer"] as &[&str],
+            "researcher",
+        ),
+        (
+            "Delivery Planner",
+            "Turns goals into a sequenced delivery plan with acceptance checks, risks, and approval points. Use before implementing substantial work.",
+            "inherit",
+            &["Read", "Grep", "Glob"] as &[&str],
+            &["Project Planner"] as &[&str],
+            "planner",
+        ),
+    ];
+    let category = Path::new("starter-agents");
+    let mut created = Vec::new();
+    for (name, description, model, tools, skills, template) in starters {
+        let destination = root
+            .join("agents")
+            .join(category)
+            .join(format!("{}.md", slug(name)?));
+        if !destination.exists() {
+            created.push(create_agent_at(
+                &root,
+                category,
+                name,
+                description,
+                model,
+                tools,
+                skills,
+                template,
+            )?);
+        }
+    }
+    Ok(created)
+}
+
 fn authorized_agent_file(root: &Path, agent_path: &Path) -> Result<(PathBuf, PathBuf), String> {
     let root = canonical_dir(root)?;
     let agent_root = canonical_dir(&root.join("agents"))?;
@@ -1033,6 +1128,7 @@ pub fn run() {
             create_agent_category,
             create_skill,
             seed_starter_skills,
+            seed_starter_agents,
             create_agent,
             read_agent,
             save_agent,

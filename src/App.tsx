@@ -263,6 +263,19 @@ function App() {
       setBusy(false)
     }
   }
+  const seedStarterAgents = async () => {
+    if (!library) return
+    setBusy(true)
+    try {
+      const created = await invoke<AgentSummary[]>('seed_starter_agents', { root: library.root })
+      await refresh()
+      setNotice(created.length ? `Added ${created.length} starter agents.` : 'Starter agents are already present.')
+    } catch (error) {
+      setNotice(String(error))
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const importSkill = async () => {
     if (!library) return
@@ -371,6 +384,7 @@ function App() {
         <button onClick={() => openCreationDialog('folder')} disabled={!library}>New Folder</button>
         {kind === 'skills' && <button onClick={importSkill} disabled={!library}>Import Skill</button>}
         {kind === 'skills' && <button onClick={seedStarters} disabled={!library || busy}>Add Starters</button>}
+        {kind === 'agents' && <button onClick={seedStarterAgents} disabled={!library || busy}>Add Starters</button>}
         <button onClick={reveal} disabled={!library}>Reveal in Finder</button>
         <input aria-label={`Search ${kind}`} placeholder={`Search ${kind}…`} value={query} onChange={event => setQuery(event.target.value)} />
       </section>
