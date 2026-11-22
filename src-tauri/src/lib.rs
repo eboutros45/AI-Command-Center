@@ -44,15 +44,94 @@ struct Category {
     children: Vec<Category>,
 }
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct Library {
     root: String,
     categories: Vec<Category>,
     skills: Vec<Skill>,
+    agent_categories: Vec<Category>,
+    agents: Vec<AgentSummary>,
 }
-#[derive(Default, Deserialize)]
+#[derive(Default, Deserialize, Serialize)]
 struct Frontmatter {
     name: Option<String>,
     description: Option<String>,
+}
+
+#[derive(Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentFrontmatter {
+    name: Option<String>,
+    description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "deserialize_string_list"
+    )]
+    tools: Vec<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "deserialize_string_list"
+    )]
+    skills: Vec<String>,
+}
+
+fn deserialize_string_list<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringList {
+        One(String),
+        Many(Vec<String>),
+    }
+    let value = Option::<StringList>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(StringList::One(value)) => value
+            .split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(ToOwned::to_owned)
+            .collect(),
+        Some(StringList::Many(values)) => values,
+        None => Vec::new(),
+    })
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct AgentSummary {
+    name: String,
+    description: String,
+    path: String,
+    relative_path: String,
+    modified: u64,
+    status: String,
+    errors: Vec<String>,
+    model: String,
+    tools: Vec<String>,
+    skills: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentDocument {
+    name: String,
+    description: String,
+    path: String,
+    relative_path: String,
+    modified: u64,
+    status: String,
+    errors: Vec<String>,
+    model: String,
+    tools: Vec<String>,
+    skills: Vec<String>,
+    content: String,
+    fingerprint: String,
 }
 
 fn err(error: impl std::fmt::Display) -> String {
@@ -95,6 +174,15 @@ fn within(root: &Path, candidate: &Path) -> Result<PathBuf, String> {
     }
     Ok(candidate)
 }
+
+fn authorized_relative_dir(root: &Path, relative: &Path) -> Result<PathBuf, String> {
+    let root = canonical_dir(root)?;
+    let candidate = canonical_dir(&root.join(relative))?;
+    if !candidate.starts_with(&root) {
+        return Err("Folder resolves outside the selected library".into());
+    }
+    Ok(candidate)
+}
 fn slug(value: &str) -> Result<String, String> {
     let mut output = String::new();
     let mut dash = false;
@@ -114,12 +202,23 @@ fn slug(value: &str) -> Result<String, String> {
     Ok(result)
 }
 fn split_frontmatter(content: &str) -> Result<Frontmatter, String> {
+    let yaml = frontmatter_yaml(content, "SKILL.md")?;
+    serde_yaml::from_str(yaml).map_err(|error| format!("Invalid YAML frontmatter: {error}"))
+}
+fn frontmatter_yaml<'a>(content: &'a str, filename: &str) -> Result<&'a str, String> {
     if !content.starts_with("---\n") {
-        return Err("SKILL.md must begin with YAML frontmatter".into());
+        return Err(format!("{filename} must begin with YAML frontmatter"));
     }
     let rest = &content[4..];
-    let end = rest.find("\n---").ok_or("Frontmatter has no closing ---")?;
-    serde_yaml::from_str(&rest[..end]).map_err(|error| format!("Invalid YAML frontmatter: {error}"))
+    let end = rest
+        .find("\n---\n")
+        .or_else(|| rest.strip_suffix("\n---").map(|value| value.len()))
+        .ok_or("Frontmatter has no closing ---")?;
+    Ok(&rest[..end])
+}
+fn split_agent_frontmatter(content: &str) -> Result<AgentFrontmatter, String> {
+    let yaml = frontmatter_yaml(content, "Agent file")?;
+    serde_yaml::from_str(yaml).map_err(|error| format!("Invalid YAML frontmatter: {error}"))
 }
 fn inspect(root: &Path, dir: &Path) -> Skill {
     let entry = dir.join("SKILL.md");
@@ -170,6 +269,83 @@ fn inspect(root: &Path, dir: &Path) -> Skill {
         }
         .into(),
         errors,
+    }
+}
+
+fn valid_agent_model(model: &str) -> bool {
+    matches!(model, "inherit" | "sonnet" | "opus" | "haiku" | "fable")
+        || model.starts_with("claude-")
+}
+
+fn inspect_agent(agent_root: &Path, file: &Path) -> AgentSummary {
+    let relative = file
+        .strip_prefix(agent_root)
+        .unwrap_or(file)
+        .to_string_lossy()
+        .replace('\\', "/");
+    let modified = fs::metadata(file)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |duration| duration.as_secs());
+    let fallback = file
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let mut name = fallback;
+    let mut description = String::new();
+    let mut model = "inherit".to_string();
+    let mut tools = Vec::new();
+    let mut skills = Vec::new();
+    let mut errors = Vec::new();
+    match fs::read_to_string(file) {
+        Ok(content) => match split_agent_frontmatter(&content) {
+            Ok(frontmatter) => {
+                match frontmatter.name.filter(|value| !value.trim().is_empty()) {
+                    Some(value) => name = value,
+                    None => errors.push("Missing required frontmatter: name".into()),
+                }
+                match frontmatter
+                    .description
+                    .filter(|value| !value.trim().is_empty())
+                {
+                    Some(value) => description = value,
+                    None => errors.push("Missing required frontmatter: description".into()),
+                }
+                if let Some(value) = frontmatter.model.filter(|value| !value.trim().is_empty()) {
+                    model = value;
+                }
+                tools = frontmatter.tools;
+                skills = frontmatter.skills;
+            }
+            Err(error) => errors.push(error),
+        },
+        Err(error) => errors.push(format!("Cannot read agent file: {error}")),
+    }
+    if name.starts_with('-') || name.contains(':') || name.len() > 256 {
+        errors
+            .push("Agent name cannot start with '-', contain ':', or exceed 256 characters".into());
+    }
+    if !valid_agent_model(&model) {
+        errors.push(format!("Unsupported Claude model value: {model}"));
+    }
+    AgentSummary {
+        name,
+        description,
+        path: file.to_string_lossy().into_owned(),
+        relative_path: relative,
+        modified,
+        status: if errors.is_empty() {
+            "valid"
+        } else {
+            "invalid"
+        }
+        .into(),
+        errors,
+        model,
+        tools,
+        skills,
     }
 }
 fn fingerprint(content: &str) -> String {
@@ -228,6 +404,7 @@ fn scan_library(root: String) -> Result<Library, String> {
     for entry in WalkDir::new(&root)
         .follow_links(false)
         .into_iter()
+        .filter_entry(|entry| entry.path() == root || entry.path() != root.join("agents"))
         .filter_map(Result::ok)
     {
         if entry.file_type().is_file() && entry.file_name() == "SKILL.md" {
@@ -240,10 +417,55 @@ fn scan_library(root: String) -> Result<Library, String> {
     skill_dirs.dedup();
     let mut skills: Vec<_> = skill_dirs.iter().map(|path| inspect(&root, path)).collect();
     skills.sort_by(|a, b| b.modified.cmp(&a.modified));
+    let agent_root = root.join("agents");
+    let mut agents = Vec::new();
+    if agent_root.is_dir() {
+        for entry in WalkDir::new(&agent_root)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(Result::ok)
+        {
+            if entry.file_type().is_file()
+                && entry
+                    .path()
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    == Some("md")
+            {
+                agents.push(inspect_agent(&agent_root, entry.path()));
+            }
+        }
+    }
+    let mut counts = BTreeMap::new();
+    for agent in &agents {
+        *counts.entry(agent.name.to_lowercase()).or_insert(0usize) += 1;
+    }
+    for agent in &mut agents {
+        if counts
+            .get(&agent.name.to_lowercase())
+            .copied()
+            .unwrap_or_default()
+            > 1
+        {
+            agent
+                .errors
+                .push("Agent name is duplicated in this library".into());
+            agent.status = "invalid".into();
+        }
+    }
+    agents.sort_by(|a, b| b.modified.cmp(&a.modified));
+    let mut categories = category_tree(&root, &skill_dirs);
+    categories.retain(|category| category.relative_path != "agents");
     Ok(Library {
         root: root.to_string_lossy().into(),
-        categories: category_tree(&root, &skill_dirs),
+        categories,
         skills,
+        agent_categories: if agent_root.is_dir() {
+            category_tree(&agent_root, &[])
+        } else {
+            Vec::new()
+        },
+        agents,
     })
 }
 
@@ -291,13 +513,30 @@ fn save_skill(
 fn create_category(root: String, parent: String, name: String) -> Result<String, String> {
     let root = canonical_dir(Path::new(&root))?;
     let parent = safe_relative(&parent)?;
+    let parent = authorized_relative_dir(&root, &parent)?;
     let name = slug(&name)?;
-    let destination = root.join(parent).join(name);
+    let destination = parent.join(name);
     if destination.exists() {
         return Err("A folder with that name already exists".into());
     }
     fs::create_dir(&destination).map_err(err)?;
     Ok(destination.to_string_lossy().into())
+}
+
+#[tauri::command]
+fn create_agent_category(root: String, parent: String, name: String) -> Result<String, String> {
+    let root = canonical_dir(Path::new(&root))?;
+    let agent_root = root.join("agents");
+    fs::create_dir_all(&agent_root).map_err(err)?;
+    let agent_root = canonical_dir(&agent_root)?;
+    let parent = safe_relative(&parent)?;
+    let parent = authorized_relative_dir(&agent_root, &parent)?;
+    let destination = parent.join(slug(&name)?);
+    if destination.exists() {
+        return Err("An agent folder with that name already exists".into());
+    }
+    fs::create_dir(&destination).map_err(err)?;
+    Ok(destination.to_string_lossy().into_owned())
 }
 
 #[tauri::command]
@@ -310,6 +549,8 @@ fn create_skill(
 ) -> Result<Skill, String> {
     let root = canonical_dir(Path::new(&root))?;
     let category = safe_relative(&category)?;
+    let category = authorized_relative_dir(&root, &category)?;
+    let category = category.strip_prefix(&root).map_err(err)?.to_path_buf();
     create_skill_at(&root, &category, &name, &description, template.as_deref())
 }
 
@@ -349,12 +590,15 @@ fn create_skill_at(
     let safe_name = name.replace(['\n', '\r'], " ");
     let safe_description = description.replace(['\n', '\r'], " ");
     let body = template_body(template, &safe_name);
+    let frontmatter = Frontmatter {
+        name: Some(safe_name.clone()),
+        description: Some(safe_description),
+    };
+    let yaml = serde_yaml::to_string(&frontmatter)
+        .map_err(|error| format!("Could not serialize skill frontmatter: {error}"))?;
     fs::write(
         destination.join("SKILL.md"),
-        format!(
-            "---\nname: {}\ndescription: {}\n---\n\n{}",
-            safe_name, safe_description, body
-        ),
+        format!("---\n{yaml}---\n\n{body}"),
     )
     .map_err(err)?;
     Ok(inspect(&root, &destination))
@@ -400,6 +644,172 @@ fn seed_starter_skills(root: String) -> Result<Vec<Skill>, String> {
         }
     }
     Ok(created)
+}
+
+fn agent_template_body(template: Option<&str>, name: &str) -> String {
+    match template.unwrap_or("specialist") {
+        "reviewer" => format!(
+            "# {name}\n\nYou are a rigorous reviewer. Establish the intended outcome before evaluating the work. Inspect the available evidence, prioritize findings by impact, and distinguish confirmed defects from optional improvements.\n\n## Operating process\n\n1. Confirm the goal, scope, and relevant constraints.\n2. Inspect the supplied material before reaching conclusions.\n3. Identify correctness, safety, maintainability, and verification gaps.\n4. Cite concrete evidence for every material finding.\n5. Recommend the smallest effective next steps.\n\n## Boundaries\n\nDo not change files or external state unless the user explicitly asks. State uncertainty when evidence is incomplete.\n\n## Output contract\n\nLead with prioritized findings, followed by assumptions, recommended actions, and verification steps.\n"
+        ),
+        "researcher" => format!(
+            "# {name}\n\nYou are an evidence-first research specialist. Turn broad questions into a clear research scope, prefer primary sources, reconcile conflicting claims, and make uncertainty visible.\n\n## Operating process\n\n1. Define the question, audience, timeframe, and decision it supports.\n2. Gather the most authoritative and current evidence available.\n3. Track each important claim to its source.\n4. Compare conflicting evidence and explain the difference.\n5. Synthesize conclusions and identify remaining gaps.\n\n## Boundaries\n\nNever invent citations or imply that an unverified claim is established fact.\n\n## Output contract\n\nProvide a concise synthesis, key evidence, sources, confidence, and open questions.\n"
+        ),
+        "planner" => format!(
+            "# {name}\n\nYou are an execution-focused planning specialist. Convert goals into sequenced, verifiable work while keeping decisions, dependencies, and risk visible.\n\n## Operating process\n\n1. Confirm the outcome and non-negotiable constraints.\n2. Identify dependencies, risks, unknowns, and approval boundaries.\n3. Break the work into coherent milestones.\n4. Define acceptance checks for every milestone.\n5. Keep the plan current as new evidence appears.\n\n## Boundaries\n\nDo not treat an unresolved product decision as an implementation detail.\n\n## Output contract\n\nReturn an ordered plan with outcomes, checks, dependencies, risks, and decisions requiring approval.\n"
+        ),
+        _ => format!(
+            "# {name}\n\nYou are a focused specialist responsible for the objective described above. Work methodically, use the assigned skills when relevant, and communicate assumptions before they affect the result.\n\n## Operating process\n\n1. Clarify the requested outcome and constraints.\n2. Inspect the available context and evidence.\n3. Apply the most relevant assigned capabilities.\n4. Verify the result in proportion to its risk.\n5. Report the outcome, limitations, and next action clearly.\n\n## Boundaries\n\nDo not expand scope, execute destructive actions, or change external state without appropriate authorization.\n\n## Output contract\n\nLead with the result. Include evidence, limitations, and next steps only where they help the user act.\n"
+        ),
+    }
+}
+
+#[tauri::command]
+fn create_agent(
+    root: String,
+    category: String,
+    name: String,
+    description: String,
+    model: String,
+    tools: Vec<String>,
+    skills: Vec<String>,
+    template: Option<String>,
+) -> Result<AgentSummary, String> {
+    let root = canonical_dir(Path::new(&root))?;
+    let category = safe_relative(&category)?;
+    let filename = format!("{}.md", slug(&name)?);
+    let agent_root = root.join("agents");
+    fs::create_dir_all(&agent_root).map_err(err)?;
+    let agent_root = canonical_dir(&agent_root)?;
+    let parent = authorized_relative_dir(&agent_root, &category)?;
+    let destination = parent.join(filename);
+    if destination.exists() {
+        return Err("An agent with that filename already exists".into());
+    }
+    let safe_name = name.replace(['\n', '\r'], " ");
+    if safe_name.starts_with('-') || safe_name.contains(':') || safe_name.len() > 256 {
+        return Err(
+            "Agent name cannot start with '-', contain ':', or exceed 256 characters".into(),
+        );
+    }
+    let model = if model.trim().is_empty() {
+        "inherit".to_string()
+    } else {
+        model.trim().to_string()
+    };
+    if !valid_agent_model(&model) {
+        return Err(format!("Unsupported Claude model value: {model}"));
+    }
+    let frontmatter = AgentFrontmatter {
+        name: Some(safe_name.clone()),
+        description: Some(description.replace(['\n', '\r'], " ")),
+        model: Some(model),
+        tools: tools
+            .into_iter()
+            .map(|tool| tool.trim().to_string())
+            .filter(|tool| !tool.is_empty())
+            .collect(),
+        skills: skills
+            .into_iter()
+            .map(|skill| skill.trim().to_string())
+            .filter(|skill| !skill.is_empty())
+            .collect(),
+    };
+    let yaml = serde_yaml::to_string(&frontmatter)
+        .map_err(|error| format!("Could not serialize agent frontmatter: {error}"))?;
+    let body = agent_template_body(template.as_deref(), &safe_name);
+    fs::write(&destination, format!("---\n{yaml}---\n\n{body}")).map_err(err)?;
+    Ok(inspect_agent(&agent_root, &destination))
+}
+
+fn authorized_agent_file(root: &Path, agent_path: &Path) -> Result<(PathBuf, PathBuf), String> {
+    let root = canonical_dir(root)?;
+    let agent_root = canonical_dir(&root.join("agents"))?;
+    let file = agent_path.canonicalize().map_err(err)?;
+    if !file.is_file() || !file.starts_with(&agent_root) {
+        return Err("Agent path is outside the selected library".into());
+    }
+    Ok((agent_root, file))
+}
+
+#[tauri::command]
+fn read_agent(root: String, agent_path: String) -> Result<AgentDocument, String> {
+    let (agent_root, file) = authorized_agent_file(Path::new(&root), Path::new(&agent_path))?;
+    let content = fs::read_to_string(&file).map_err(err)?;
+    let agent = inspect_agent(&agent_root, &file);
+    Ok(AgentDocument {
+        name: agent.name,
+        description: agent.description,
+        path: agent.path,
+        relative_path: agent.relative_path,
+        modified: agent.modified,
+        status: agent.status,
+        errors: agent.errors,
+        model: agent.model,
+        tools: agent.tools,
+        skills: agent.skills,
+        fingerprint: fingerprint(&content),
+        content,
+    })
+}
+
+#[tauri::command]
+fn save_agent(
+    root: String,
+    agent_path: String,
+    content: String,
+    expected_fingerprint: String,
+) -> Result<AgentDocument, String> {
+    let (_, file) = authorized_agent_file(Path::new(&root), Path::new(&agent_path))?;
+    let current = fs::read_to_string(&file).map_err(err)?;
+    if fingerprint(&current) != expected_fingerprint {
+        return Err("Agent changed outside the app. Reload it before saving, or explicitly resolve the conflict.".into());
+    }
+    let parent = file.parent().ok_or("Agent has no parent folder")?;
+    let temporary = parent.join(format!(
+        ".{}.command-center.tmp",
+        file.file_name().unwrap_or_default().to_string_lossy()
+    ));
+    fs::write(&temporary, content.as_bytes()).map_err(err)?;
+    fs::rename(&temporary, &file).map_err(err)?;
+    read_agent(root, agent_path)
+}
+
+#[tauri::command]
+fn install_agent(
+    root: String,
+    agent_path: String,
+    scope: String,
+    project_root: Option<String>,
+) -> Result<String, String> {
+    let (agent_root, agent) = authorized_agent_file(Path::new(&root), Path::new(&agent_path))?;
+    if inspect_agent(&agent_root, &agent).status != "valid" {
+        return Err("Fix validation errors before installing".into());
+    }
+    let base = match scope.as_str() {
+        "personal" => dirs::home_dir()
+            .ok_or("Home folder is unavailable")?
+            .join(".claude/agents"),
+        "project" => canonical_dir(Path::new(
+            project_root.as_deref().ok_or("Choose a project folder")?,
+        ))?
+        .join(".claude/agents"),
+        _ => return Err("Unknown installation scope".into()),
+    };
+    fs::create_dir_all(&base).map_err(err)?;
+    let filename = agent.file_name().ok_or("Agent file has no name")?;
+    let destination = base.join(filename);
+    if destination.exists() || destination.symlink_metadata().is_ok() {
+        return Err(format!(
+            "Installation target already exists: {}",
+            destination.display()
+        ));
+    }
+    fs::copy(&agent, &destination).map_err(err)?;
+    if fs::read(&agent).map_err(err)? != fs::read(&destination).map_err(err)? {
+        let _ = fs::remove_file(&destination);
+        return Err("Could not verify installed agent copy".into());
+    }
+    Ok(destination.to_string_lossy().into_owned())
 }
 
 fn copy_dir(source: &Path, destination: &Path) -> Result<(), String> {
@@ -574,8 +984,13 @@ pub fn run() {
             read_skill,
             save_skill,
             create_category,
+            create_agent_category,
             create_skill,
             seed_starter_skills,
+            create_agent,
+            read_agent,
+            save_agent,
+            install_agent,
             import_skill,
             export_skill_zip,
             install_skill,
@@ -602,5 +1017,35 @@ mod tests {
     fn protects_reserved_slugs() {
         assert!(slug("Synced").is_err());
         assert_eq!(slug("My Useful Skill").unwrap(), "my-useful-skill");
+    }
+    #[test]
+    fn parses_agent_frontmatter_lists() {
+        let parsed = split_agent_frontmatter(
+            "---\nname: reviewer\ndescription: 'Review: code safely'\nmodel: sonnet\ntools:\n  - Read\n  - Grep\nskills:\n  - code-review\n---\nBody",
+        )
+        .unwrap();
+        assert_eq!(parsed.name.as_deref(), Some("reviewer"));
+        assert_eq!(parsed.tools, vec!["Read", "Grep"]);
+        assert_eq!(parsed.skills, vec!["code-review"]);
+    }
+    #[test]
+    fn validates_agent_models() {
+        assert!(valid_agent_model("inherit"));
+        assert!(valid_agent_model("claude-sonnet-4-5-20250929"));
+        assert!(!valid_agent_model("fastest"));
+    }
+    #[test]
+    fn serializes_yaml_sensitive_skill_metadata() {
+        let frontmatter = Frontmatter {
+            name: Some("Review: API #1".into()),
+            description: Some("Checks: safety and 'correctness'".into()),
+        };
+        let yaml = serde_yaml::to_string(&frontmatter).unwrap();
+        let parsed: Frontmatter = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(parsed.name.as_deref(), Some("Review: API #1"));
+        assert_eq!(
+            parsed.description.as_deref(),
+            Some("Checks: safety and 'correctness'")
+        );
     }
 }

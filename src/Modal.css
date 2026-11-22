@@ -1,25 +1,31 @@
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 20;
+  z-index: 30;
   display: grid;
   place-items: center;
-  background: rgba(17, 27, 24, 0.42);
-  backdrop-filter: blur(3px);
-  animation: appear 0.15s ease-out;
+  padding: 20px;
+  background: rgba(17, 27, 24, 0.46);
+  backdrop-filter: blur(4px);
+  animation: appear 0.14s ease-out;
 }
+
 .modal {
-  width: min(460px, calc(100vw - 40px));
+  width: min(470px, calc(100vw - 40px));
+  max-height: calc(100vh - 40px);
+  overflow: auto;
   padding: 24px;
-  background: #fff;
   border: 1px solid var(--line);
   border-radius: 12px;
-  box-shadow: 0 20px 60px rgba(14, 31, 26, 0.22);
+  background: #fff;
+  box-shadow: var(--shadow);
 }
+.creation-modal { width: min(600px, calc(100vw - 40px)); }
+.confirm-modal { width: min(430px, calc(100vw - 40px)); }
 .modal h2 { margin: 5px 0; font: 600 24px Georgia, serif; }
-.modal > p { margin: 0 0 20px; color: var(--muted); font-size: 12px; }
-.modal label { display: block; margin-top: 14px; color: var(--ink); font-size: 12px; font-weight: 650; }
-.modal input, .modal textarea, .modal select {
+.modal > p { margin: 0 0 20px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.modal label { display: block; min-width: 0; margin-top: 14px; color: var(--ink); font-size: 11px; font-weight: 700; }
+.modal input[type='text'], .modal input:not([type]), .modal textarea, .modal select {
   display: block;
   width: 100%;
   margin-top: 7px;
@@ -32,6 +38,23 @@
   font: 13px/1.5 inherit;
 }
 .modal textarea { resize: vertical; }
-.modal input:focus, .modal textarea:focus, .modal select:focus { border-color: #82a99b; box-shadow: 0 0 0 3px #e9f2ee; }
-.modal .field-help { margin: 7px 0 0; color: var(--muted); font-size: 11px; }
-.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 22px; }
+.modal input:focus, .modal textarea:focus, .modal select:focus { border-color: #79a797; box-shadow: 0 0 0 3px #e9f2ee; }
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.path-preview { margin-top: 7px; padding: 7px 10px; border-radius: 5px; background: #f0f4f2; color: var(--green); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.modal fieldset { margin: 18px 0 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+.modal legend { padding: 0 5px; color: var(--muted); font-size: 10px; font-weight: 750; letter-spacing: 0.06em; text-transform: uppercase; }
+.option-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; }
+.check-option { display: flex !important; align-items: center; gap: 7px; margin: 0 !important; padding: 7px 8px; border-radius: 6px; background: #f7f9f7; cursor: pointer; }
+.check-option input { flex: 0 0 auto; width: auto !important; margin: 0 !important; accent-color: var(--green); }
+.check-option span { min-width: 0; }
+.check-option strong { display: block; font-size: 10px; }
+.check-option small { display: block; overflow: hidden; margin-top: 2px; color: var(--muted); font-size: 8px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+.skill-options { display: grid; max-height: 150px; overflow: auto; gap: 6px; }
+.skill-options .check-option { align-items: flex-start; }
+.modal .field-help { margin: 8px 0 0; color: var(--muted); font-size: 10px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 23px; }
+
+@media (max-width: 720px) {
+  .form-row { grid-template-columns: 1fr; }
+  .option-grid { grid-template-columns: repeat(2, 1fr); }
+}

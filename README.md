@@ -1,6 +1,6 @@
 # AI Command Center
 
-A local-first macOS-oriented library for creating, organizing, validating, and publishing portable AI skills. The filesystem is the source of truth: every category and skill remains an ordinary folder visible in Finder.
+A local-first macOS-oriented studio for creating, organizing, validating, and publishing portable AI skills and Claude Code agents. The filesystem is the source of truth: every capability remains an ordinary folder or Markdown file visible in Finder.
 
 ## Development
 
@@ -25,8 +25,12 @@ cargo test --manifest-path src-tauri/Cargo.toml
 - Choose one local library root and browse its physical folder hierarchy.
 - Create category folders and valid `SKILL.md` packages.
 - Import complete skill folders without altering their source.
-- Search, edit, explicitly save, and validate skills.
+- Create Claude Code agents with a model preference, tool allowlist, role template, and preloaded library skills.
+- Switch between Skills and Agents studios with physical categories for each.
+- Search, inspect, edit, explicitly save, and validate canonical Markdown source.
+- Run provider-free quality checks for activation conditions, process, constraints, output contracts, placeholders, and Claude compatibility.
 - Detect save conflicts using content fingerprints.
 - Export portable ZIPs and install verified Claude Code symlinks to personal or project skill locations.
+- Install agents as verified Markdown copies to personal or project Claude Code locations.
 
-Local Claude Code installation does not imply that a running session has loaded a skill. ZIP export requires manual upload for account-level Claude access.
+Local Claude Code installation does not imply that a running session has loaded a capability. ZIP export requires manual upload for account-level Claude access. See [Capability Studio architecture](docs/CAPABILITY_STUDIO.md) for the product model and future extension seams.
