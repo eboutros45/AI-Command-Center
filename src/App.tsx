@@ -93,7 +93,7 @@ function App() {
       return await invoke<string | null>('choose_directory', { title })
     } catch (error) {
       setNotice(`Folder picker failed: ${String(error)}`)
-      return null
+      return undefined
     }
   }
 
@@ -133,7 +133,7 @@ function App() {
         setSelected(null)
         setDraft('')
         await refresh(path)
-      } else setNotice('No folder selected.')
+      } else if (path === null) setNotice('No folder selected.')
     }
     if (isDirty) {
       askConfirmation({ title: 'Leave unsaved changes?', body: 'Changing libraries will discard the current editor draft.', confirmLabel: 'Discard and continue', tone: 'danger', action: perform })
@@ -305,8 +305,9 @@ function App() {
     if (!selected || !library) return
     let projectRoot: string | null = null
     if (scope === 'project') {
-      projectRoot = await chooseDirectory('Choose Claude project')
-      if (!projectRoot) return
+      const selectedProject = await chooseDirectory('Choose Claude project')
+      if (typeof selectedProject !== 'string') return
+      projectRoot = selectedProject
     }
     const assetLabel = selected.kind === 'skills' ? 'skill' : 'agent'
     askConfirmation({

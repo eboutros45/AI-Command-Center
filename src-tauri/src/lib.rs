@@ -140,7 +140,17 @@ fn err(error: impl std::fmt::Display) -> String {
 
 #[tauri::command]
 async fn choose_directory(app: tauri::AppHandle, title: String) -> Result<Option<String>, String> {
-    let selected = app.dialog().file().set_title(title).blocking_pick_folder();
+    let (sender, mut receiver) = tauri::async_runtime::channel(1);
+    app.dialog()
+        .file()
+        .set_title(title)
+        .pick_folder(move |selected| {
+            let _ = sender.try_send(selected);
+        });
+    let selected = receiver
+        .recv()
+        .await
+        .ok_or("Folder picker closed before a selection was returned")?;
     selected
         .map(|path| {
             path.into_path()
