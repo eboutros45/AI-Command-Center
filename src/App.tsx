@@ -63,6 +63,13 @@ type Confirmation = {
 }
 
 const TOOL_OPTIONS = ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash', 'WebSearch', 'WebFetch']
+const SKILL_RECIPES = [
+  { id: 'general', title: 'Workflow', detail: 'A repeatable process for a common task.' },
+  { id: 'review', title: 'Review', detail: 'Find issues, prioritize them, and recommend fixes.' },
+  { id: 'research', title: 'Research', detail: 'Gather evidence and synthesize an answer.' },
+  { id: 'planning', title: 'Planner', detail: 'Turn a goal into sequenced, verifiable work.' },
+  { id: 'skill-creator', title: 'Skill maker', detail: 'Design and improve reusable AI skills.' },
+]
 const isTauri = () => '__TAURI_INTERNALS__' in window
 const slugify = (value: string) => value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
 
@@ -80,6 +87,10 @@ function App() {
   const [creationName, setCreationName] = useState('')
   const [creationDescription, setCreationDescription] = useState('')
   const [creationTemplate, setCreationTemplate] = useState('general')
+  const [skillActivation, setSkillActivation] = useState('')
+  const [skillTone, setSkillTone] = useState('clear and practical')
+  const [skillOutputFormat, setSkillOutputFormat] = useState('a concise answer with clear next steps')
+  const [skillInstructions, setSkillInstructions] = useState('')
   const [agentModel, setAgentModel] = useState('inherit')
   const [agentTools, setAgentTools] = useState<string[]>(['Read', 'Grep', 'Glob'])
   const [agentSkills, setAgentSkills] = useState<string[]>([])
@@ -202,6 +213,10 @@ function App() {
     setCreationName('')
     setCreationDescription('')
     setCreationTemplate(type === 'agent' ? 'specialist' : 'general')
+    setSkillActivation('')
+    setSkillTone('clear and practical')
+    setSkillOutputFormat('a concise answer with clear next steps')
+    setSkillInstructions('')
     setAgentModel('inherit')
     setAgentTools(['Read', 'Grep', 'Glob'])
     setAgentSkills([])
@@ -220,7 +235,19 @@ function App() {
         await invoke(kind === 'skills' ? 'create_category' : 'create_agent_category', { root: library.root, parent: selectedCategory, name })
         setNotice(`Created folder “${name}”.`)
       } else if (creationDialog === 'skill') {
-        const skill = await invoke<SkillSummary>('create_skill', { root: library.root, category: selectedCategory, name, description, template: creationTemplate })
+        const skill = await invoke<SkillSummary>('create_skill', {
+          root: library.root,
+          category: selectedCategory,
+          name,
+          description,
+          template: creationTemplate,
+          preferences: {
+            activation: skillActivation,
+            tone: skillTone,
+            outputFormat: skillOutputFormat,
+            instructions: skillInstructions,
+          },
+        })
         setCreationDialog(null)
         await refresh()
         await loadAsset('skills', skill)
@@ -459,7 +486,12 @@ function App() {
           <label>Name<input autoFocus value={creationName} onChange={event => setCreationName(event.target.value)} placeholder={creationDialog === 'agent' ? 'Code investigator' : creationDialog === 'skill' ? 'Code reviewer' : 'Development'} /></label>
           {creationName && <div className="path-preview">{creationDialog === 'agent' || (creationDialog === 'folder' && kind === 'agents') ? 'agents/' : ''}{selectedCategory ? `${selectedCategory}/` : ''}{slugify(creationName)}{creationDialog === 'agent' ? '.md' : ''}</div>}
           {creationDialog !== 'folder' && <label>Description<textarea value={creationDescription} onChange={event => setCreationDescription(event.target.value)} placeholder="What does it do, and when should Claude use it?" rows={3} /></label>}
-          {creationDialog === 'skill' && <label>Starting structure<select value={creationTemplate} onChange={event => setCreationTemplate(event.target.value)}><option value="general">General workflow</option><option value="review">Review and critique</option><option value="research">Research and synthesis</option><option value="planning">Planning and execution</option><option value="skill-creator">Skill creator</option></select></label>}
+          {creationDialog === 'skill' && <>
+            <fieldset className="recipe-picker"><legend>Start from a recipe</legend><div className="recipe-grid">{SKILL_RECIPES.map(recipe => <button type="button" key={recipe.id} className={creationTemplate === recipe.id ? 'recipe selected' : 'recipe'} onClick={() => setCreationTemplate(recipe.id)}><strong>{recipe.title}</strong><span>{recipe.detail}</span></button>)}</div></fieldset>
+            <label>Use it when <input value={skillActivation} onChange={event => setSkillActivation(event.target.value)} placeholder="for example: a user asks to review a pull request" /></label>
+            <div className="form-row"><label>Response style<select value={skillTone} onChange={event => setSkillTone(event.target.value)}><option value="clear and practical">Clear and practical</option><option value="concise and direct">Concise and direct</option><option value="thorough and rigorous">Thorough and rigorous</option><option value="teaching-oriented">Teaching-oriented</option><option value="warm and collaborative">Warm and collaborative</option></select></label><label>Preferred deliverable<select value={skillOutputFormat} onChange={event => setSkillOutputFormat(event.target.value)}><option value="a concise answer with clear next steps">Concise answer + next steps</option><option value="a numbered step-by-step plan">Numbered step-by-step plan</option><option value="a prioritized checklist">Prioritized checklist</option><option value="a short executive brief">Short executive brief</option><option value="findings grouped by priority">Findings grouped by priority</option></select></label></div>
+            <label>Personal rules <textarea value={skillInstructions} onChange={event => setSkillInstructions(event.target.value)} placeholder="What should it always do, avoid, or ask before proceeding?" rows={3} /></label>
+          </>}
           {creationDialog === 'agent' && <>
             <div className="form-row"><label>Model<select value={agentModel} onChange={event => setAgentModel(event.target.value)}><option value="inherit">Inherit session model</option><option value="sonnet">Sonnet</option><option value="opus">Opus</option><option value="haiku">Haiku</option></select></label><label>Starting role<select value={creationTemplate} onChange={event => setCreationTemplate(event.target.value)}><option value="specialist">Focused specialist</option><option value="reviewer">Reviewer</option><option value="researcher">Researcher</option><option value="planner">Planner</option></select></label></div>
             <fieldset><legend>Allowed tools</legend><div className="option-grid">{TOOL_OPTIONS.map(tool => <label className="check-option" key={tool}><input type="checkbox" checked={agentTools.includes(tool)} onChange={() => setAgentTools(current => current.includes(tool) ? current.filter(item => item !== tool) : [...current, tool])} />{tool}</label>)}</div></fieldset>

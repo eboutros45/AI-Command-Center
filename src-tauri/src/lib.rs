@@ -57,6 +57,19 @@ struct Frontmatter {
     description: Option<String>,
 }
 
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SkillPreferences {
+    #[serde(default)]
+    activation: String,
+    #[serde(default)]
+    tone: String,
+    #[serde(default)]
+    output_format: String,
+    #[serde(default)]
+    instructions: String,
+}
+
 #[derive(Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AgentFrontmatter {
@@ -534,12 +547,49 @@ fn create_skill(
     name: String,
     description: String,
     template: Option<String>,
+    preferences: Option<SkillPreferences>,
 ) -> Result<Skill, String> {
     let root = canonical_dir(Path::new(&root))?;
     let category = safe_relative(&category)?;
     let category = authorized_relative_dir(&root, &category)?;
     let category = category.strip_prefix(&root).map_err(err)?.to_path_buf();
-    create_skill_at(&root, &category, &name, &description, template.as_deref())
+    create_skill_at(
+        &root,
+        &category,
+        &name,
+        &description,
+        template.as_deref(),
+        preferences.as_ref(),
+    )
+}
+
+fn append_preferences(mut body: String, preferences: Option<&SkillPreferences>) -> String {
+    let Some(preferences) = preferences else {
+        return body;
+    };
+    let clean = |value: &str| value.trim().replace(['\r', '\n'], " ");
+    let activation = clean(&preferences.activation);
+    let tone = clean(&preferences.tone);
+    let output_format = clean(&preferences.output_format);
+    let instructions = preferences.instructions.trim();
+    if !activation.is_empty() {
+        body.push_str(&format!(
+            "\n## Personal activation guidance\n\nUse this skill when {activation}.\n"
+        ));
+    }
+    if !tone.is_empty() || !output_format.is_empty() {
+        body.push_str("\n## Response preferences\n\n");
+        if !tone.is_empty() {
+            body.push_str(&format!("- Style: {tone}\n"));
+        }
+        if !output_format.is_empty() {
+            body.push_str(&format!("- Deliverable: {output_format}\n"));
+        }
+    }
+    if !instructions.is_empty() {
+        body.push_str(&format!("\n## Personal instructions\n\n{}\n", instructions));
+    }
+    body
 }
 
 fn template_body(template: Option<&str>, name: &str) -> String {
@@ -568,6 +618,7 @@ fn create_skill_at(
     name: &str,
     description: &str,
     template: Option<&str>,
+    preferences: Option<&SkillPreferences>,
 ) -> Result<Skill, String> {
     let folder = slug(&name)?;
     let destination = root.join(category).join(&folder);
@@ -577,7 +628,7 @@ fn create_skill_at(
     fs::create_dir(&destination).map_err(err)?;
     let safe_name = name.replace(['\n', '\r'], " ");
     let safe_description = description.replace(['\n', '\r'], " ");
-    let body = template_body(template, &safe_name);
+    let body = append_preferences(template_body(template, &safe_name), preferences);
     let frontmatter = Frontmatter {
         name: Some(safe_name.clone()),
         description: Some(safe_description),
@@ -628,6 +679,7 @@ fn seed_starter_skills(root: String) -> Result<Vec<Skill>, String> {
                 name,
                 description,
                 Some(template),
+                None,
             )?);
         }
     }
