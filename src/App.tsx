@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEven
 import { invoke } from '@tauri-apps/api/core'
 import { evaluateSource } from './domain/quality'
 import Knowledge from './Knowledge'
+import RunAndTest from './RunAndTest'
 import './App.css'
 import './Modal.css'
 
@@ -151,7 +152,8 @@ function App() {
   const [creationError, setCreationError] = useState('')
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [result, setResult] = useState<{ message: string; path: string } | null>(null)
-  const [showKnowledge, setShowKnowledge] = useState(false)
+  const [workspaceView, setWorkspaceView] = useState<'knowledge' | 'run' | null>(null)
+  const [testSkillPath, setTestSkillPath] = useState('')
 
   const isDirty = Boolean(selected && draft !== selected.document.content)
 
@@ -500,12 +502,13 @@ function App() {
           <b aria-hidden="true">⌄</b>
         </button>
         <nav className="kind-switch" aria-label="Library type">
-          <button className={!showKnowledge && kind === 'skills' ? 'active' : ''} onClick={() => { setShowKnowledge(false); switchKind('skills') }}>Skills <span>{library?.skills.length ?? 0}</span></button>
-          <button className={!showKnowledge && kind === 'agents' ? 'active' : ''} onClick={() => { setShowKnowledge(false); switchKind('agents') }}>Agents <span>{library?.agents.length ?? 0}</span></button>
+          <button className={!workspaceView && kind === 'skills' ? 'active' : ''} onClick={() => { setWorkspaceView(null); switchKind('skills') }}>Skills <span>{library?.skills.length ?? 0}</span></button>
+          <button className={!workspaceView && kind === 'agents' ? 'active' : ''} onClick={() => { setWorkspaceView(null); switchKind('agents') }}>Agents <span>{library?.agents.length ?? 0}</span></button>
         </nav>
-        <button className={`knowledge-nav ${showKnowledge ? 'current' : ''}`} aria-pressed={showKnowledge} onClick={() => setShowKnowledge(true)}>Knowledge</button>
+        <button className={`knowledge-nav ${workspaceView === 'knowledge' ? 'current' : ''}`} aria-pressed={workspaceView === 'knowledge'} onClick={() => setWorkspaceView('knowledge')}>Knowledge</button>
+        <button className={`knowledge-nav ${workspaceView === 'run' ? 'current' : ''}`} aria-pressed={workspaceView === 'run'} onClick={() => { setTestSkillPath(''); setWorkspaceView('run') }}>Run &amp; Test</button>
         <div className="folder-scroll">
-          {!showKnowledge && <>
+          {!workspaceView && <>
           <div className="pane-title"><span>Folders</span><button className="icon-button" aria-label="New folder" title="New folder" onClick={() => openCreationDialog('folder')} disabled={!library || busy}>+</button></div>
           <button className={`all-folders ${!selectedCategory ? 'current' : ''}`} aria-current={!selectedCategory ? 'true' : undefined} onClick={() => setSelectedCategory('')}><span aria-hidden="true">▦</span> All {kind}<small>{summaries.length}</small></button>
           {renderCategories(categories)}
@@ -515,7 +518,8 @@ function App() {
         {library && <div className="sidebar-bottom"><span title={library.root}>{library.root}</span><button onClick={() => reveal(library.root)}>Open in file manager</button></div>}
       </aside>
 
-      {showKnowledge ? <Knowledge libraryRoot={library?.root} skills={library?.skills ?? []} desktop={isTauri()} /> : <section className="workspace">
+      {workspaceView === 'knowledge' ? <Knowledge libraryRoot={library?.root} skills={library?.skills ?? []} desktop={isTauri()} /> : workspaceView === 'run' ?
+        <RunAndTest key={library?.root} libraryRoot={library?.root} skills={library?.skills ?? []} initialSkillPath={testSkillPath} openLibrary={chooseRoot} /> : <section className="workspace">
         <header className="workspace-head">
           <div className="workspace-location"><span>{kind === 'skills' ? 'Skills' : 'Agents'} /</span><strong title={selectedCategory}>{selectedCategory.split('/').at(-1) || 'All folders'}</strong></div>
           {library && <div className="header-actions">
@@ -545,7 +549,7 @@ function App() {
           {selected ? <>
             <div className="studio-head">
               <div><div className="eyebrow">{selected.kind === 'skills' ? 'Portable skill' : 'Claude Code agent'}</div><h2>{selected.document.name}</h2><p>{selected.document.path}</p></div>
-              <div className="head-status"><span className={`status ${selected.document.status}`}>{selected.document.status}</span>{isDirty && <span className="dirty-dot">Unsaved</span>}</div>
+              <div className="head-status"><span className={`status ${selected.document.status}`}>{selected.document.status}</span>{isDirty && <span className="dirty-dot">Unsaved</span>}{selected.kind === 'skills' && selected.document.status === 'valid' && <button onClick={() => { setTestSkillPath(selected.document.path); setWorkspaceView('run') }}>Test saved skill</button>}</div>
             </div>
             <div className="studio-tabs" role="tablist">
               {(['overview', 'source', 'files', 'quality', 'publish'] as StudioTab[]).map(item => <button key={item} className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{item[0].toUpperCase() + item.slice(1)}</button>)}

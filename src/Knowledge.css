@@ -28,3 +28,7 @@
 .knowledge-card details { border-top: 1px solid var(--line); padding-top: 8px; overflow-wrap: anywhere; }
 .knowledge-card summary { cursor: pointer; color: var(--green); font-size: 13px; }
 .knowledge-card pre, .knowledge-answer > div { white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; font-size: 13px; line-height: 1.55; }
+.run-history { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.run-history button { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; width: 100%; text-align: left; }
+.run-history button[aria-pressed='true'] { border-color: var(--green); background: var(--green-soft); }
+.run-history span { color: var(--muted); font-size: 11px; text-align: right; }

@@ -37,6 +37,7 @@ Install Git, Node.js LTS, Rust with the MSVC toolchain, Microsoft C++ Build Tool
 - Export a portable ZIP to a selected folder. Install skills in personal or project Claude Code locations. If Windows denies link creation, the app installs a copy.
 - Install agents as verified Markdown copies to personal or project Claude Code locations.
 - Search a local document folder and generate cited answers with Ollama in Knowledge.
+- Test saved skills with Ollama and reopen recent results with their exact Markdown snapshots in Run & Test.
 
 Local Claude Code installation does not imply that a running session has loaded a capability. ZIP export requires manual upload for account-level Claude access. See [Capability Studio architecture](docs/CAPABILITY_STUDIO.md) for the product model and future extension seams.
 

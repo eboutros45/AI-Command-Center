@@ -9,6 +9,8 @@ use std::{
 use walkdir::WalkDir;
 
 mod knowledge;
+mod ollama;
+mod skill_runs;
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -1207,6 +1209,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             knowledge::search_knowledge,
             knowledge::answer_from_sources,
+            skill_runs::run_skill_test,
+            skill_runs::list_skill_runs,
             scan_library,
             read_skill,
             save_skill,
