@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { evaluateSource } from './domain/quality'
+import Knowledge from './Knowledge'
 import './App.css'
 import './Modal.css'
 
@@ -150,6 +151,7 @@ function App() {
   const [creationError, setCreationError] = useState('')
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [result, setResult] = useState<{ message: string; path: string } | null>(null)
+  const [showKnowledge, setShowKnowledge] = useState(false)
 
   const isDirty = Boolean(selected && draft !== selected.document.content)
 
@@ -498,19 +500,22 @@ function App() {
           <b aria-hidden="true">⌄</b>
         </button>
         <nav className="kind-switch" aria-label="Library type">
-          <button className={kind === 'skills' ? 'active' : ''} onClick={() => switchKind('skills')}>Skills <span>{library?.skills.length ?? 0}</span></button>
-          <button className={kind === 'agents' ? 'active' : ''} onClick={() => switchKind('agents')}>Agents <span>{library?.agents.length ?? 0}</span></button>
+          <button className={!showKnowledge && kind === 'skills' ? 'active' : ''} onClick={() => { setShowKnowledge(false); switchKind('skills') }}>Skills <span>{library?.skills.length ?? 0}</span></button>
+          <button className={!showKnowledge && kind === 'agents' ? 'active' : ''} onClick={() => { setShowKnowledge(false); switchKind('agents') }}>Agents <span>{library?.agents.length ?? 0}</span></button>
         </nav>
+        <button className={`knowledge-nav ${showKnowledge ? 'current' : ''}`} aria-pressed={showKnowledge} onClick={() => setShowKnowledge(true)}>Knowledge</button>
         <div className="folder-scroll">
+          {!showKnowledge && <>
           <div className="pane-title"><span>Folders</span><button className="icon-button" aria-label="New folder" title="New folder" onClick={() => openCreationDialog('folder')} disabled={!library || busy}>+</button></div>
           <button className={`all-folders ${!selectedCategory ? 'current' : ''}`} aria-current={!selectedCategory ? 'true' : undefined} onClick={() => setSelectedCategory('')}><span aria-hidden="true">▦</span> All {kind}<small>{summaries.length}</small></button>
           {renderCategories(categories)}
           {library && categories.length === 0 && <p className="sidebar-hint">Use + to add a folder.</p>}
+          </>}
         </div>
         {library && <div className="sidebar-bottom"><span title={library.root}>{library.root}</span><button onClick={() => reveal(library.root)}>Open in file manager</button></div>}
       </aside>
 
-      <section className="workspace">
+      {showKnowledge ? <Knowledge libraryRoot={library?.root} skills={library?.skills ?? []} desktop={isTauri()} /> : <section className="workspace">
         <header className="workspace-head">
           <div className="workspace-location"><span>{kind === 'skills' ? 'Skills' : 'Agents'} /</span><strong title={selectedCategory}>{selectedCategory.split('/').at(-1) || 'All folders'}</strong></div>
           {library && <div className="header-actions">
@@ -584,7 +589,7 @@ function App() {
             </section>}
           </> : <div className="welcome"><div className="welcome-icon">{kind === 'skills' ? '⌘' : '◎'}</div><h2>{library ? `Select a${kind === 'agents' ? 'n' : ''} ${kind.slice(0, -1)}` : 'Your capabilities, on your disk'}</h2><p>{library ? `Choose a ${kind.slice(0, -1)} to inspect, improve, and publish it.` : 'Choose a local folder. Command Center keeps portable skills and agents as ordinary files you own.'}</p>{!library ? <button className="primary" onClick={chooseRoot}>Choose Capability Library</button> : <button className="primary" onClick={() => openCreationDialog(kind === 'skills' ? 'skill' : 'agent')}>Create {kind === 'skills' ? 'Skill' : 'Agent'}</button>}</div>}
         </article>
-      </section>
+      </section>}
 
       {creationDialog && <div className="modal-backdrop" role="presentation">
         <form className="modal creation-modal" role="dialog" aria-modal="true" aria-labelledby="creation-title" onSubmit={createItem}>

@@ -8,6 +8,8 @@ use std::{
 };
 use walkdir::WalkDir;
 
+mod knowledge;
+
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct Skill {
@@ -1203,6 +1205,8 @@ fn reveal_in_file_manager(path: String) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
+            knowledge::search_knowledge,
+            knowledge::answer_from_sources,
             scan_library,
             read_skill,
             save_skill,

@@ -36,5 +36,14 @@ Install Git, Node.js LTS, Rust with the MSVC toolchain, Microsoft C++ Build Tool
 - Detect save conflicts using content fingerprints.
 - Export a portable ZIP to a selected folder. Install skills in personal or project Claude Code locations. If Windows denies link creation, the app installs a copy.
 - Install agents as verified Markdown copies to personal or project Claude Code locations.
+- Search a local document folder and generate cited answers with Ollama in Knowledge.
 
 Local Claude Code installation does not imply that a running session has loaded a capability. ZIP export requires manual upload for account-level Claude access. See [Capability Studio architecture](docs/CAPABILITY_STUDIO.md) for the product model and future extension seams.
+
+## Try Knowledge
+
+1. Open **Knowledge** and enter the full path of a folder with Markdown or plain-text documents.
+2. Enter a question and select **Find sources**. Review the matching excerpts and their file and line references.
+3. For generation, start Ollama and download a model, for example `ollama pull gemma3:4b`. Enter the model's exact name, optionally choose a saved skill from your library, then select **Generate answer**.
+
+Retrieval uses keywords and reads the current files on each search. Generation sends the selected excerpts to Ollama at `127.0.0.1:11434`. To enforce local-only operation in Ollama, set `OLLAMA_NO_CLOUD=1` in its environment and restart Ollama.
