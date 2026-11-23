@@ -2,17 +2,23 @@ import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
-export type Activity = {
+export type ActivityStatus = 'running' | 'completed' | 'stopped'
+type ActivityContext = { actor: string | null; provider: 'ollama' | 'openai' | null; model: string | null }
+export type ActivityStage = ActivityContext & {
+  label: string
+  status: ActivityStatus
+  startedAt: number
+  finishedAt: number | null
+}
+export type Activity = ActivityContext & {
   id: string
   title: string
   kind: 'agent_test' | 'proposal'
-  status: 'running' | 'completed' | 'stopped'
+  status: ActivityStatus
   stage: string
-  actor: string | null
-  provider: 'ollama' | 'openai' | null
-  model: string | null
   startedAt: number
   finishedAt: number | null
+  stages?: ActivityStage[]
 }
 
 export type ActivityFeed = { work: Activity[]; loading: boolean; error: string }

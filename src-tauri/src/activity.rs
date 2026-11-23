@@ -23,6 +23,18 @@ enum WorkStatus {
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct ActivityStage {
+    label: String,
+    actor: Option<String>,
+    provider: Option<Provider>,
+    model: Option<String>,
+    status: WorkStatus,
+    started_at: u64,
+    finished_at: Option<u64>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct Work {
     id: String,
     title: String,
@@ -34,6 +46,50 @@ struct Work {
     model: Option<String>,
     started_at: u64,
     finished_at: Option<u64>,
+    stages: Vec<ActivityStage>,
+}
+
+impl Work {
+    fn advance(
+        &mut self,
+        stage: &str,
+        actor: Option<&str>,
+        model: Option<(Provider, &str)>,
+        now: u64,
+    ) {
+        self.close_stage(WorkStatus::Completed, now);
+        self.stage = stage.into();
+        self.actor = actor.map(str::to_owned);
+        self.provider = model.map(|(provider, _)| provider);
+        self.model = model.map(|(_, name)| name.to_owned());
+        self.stages.push(ActivityStage {
+            label: self.stage.clone(),
+            actor: self.actor.clone(),
+            provider: self.provider,
+            model: self.model.clone(),
+            status: WorkStatus::Running,
+            started_at: now,
+            finished_at: None,
+        });
+    }
+
+    fn close_stage(&mut self, status: WorkStatus, now: u64) {
+        if let Some(stage) = self
+            .stages
+            .last_mut()
+            .filter(|stage| stage.status == WorkStatus::Running)
+        {
+            stage.status = status;
+            stage.finished_at = Some(now.max(stage.started_at));
+        }
+    }
+}
+
+fn timestamp() -> Option<u64> {
+    UNIX_EPOCH
+        .elapsed()
+        .ok()
+        .map(|time| time.as_millis() as u64)
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -103,6 +159,7 @@ impl Tracker {
                     model: None,
                     started_at,
                     finished_at: None,
+                    stages: Vec::new(),
                 },
             )
         });
@@ -116,10 +173,7 @@ impl Tracker {
                 .iter_mut()
                 .find(|work| work.id == self.id && work.status == WorkStatus::Running)
             {
-                work.stage = stage.into();
-                work.actor = actor.map(str::to_owned);
-                work.provider = model.map(|(provider, _)| provider);
-                work.model = model.map(|(_, name)| name.to_owned());
+                work.advance(stage, actor, model, timestamp().unwrap_or(work.started_at));
             }
         });
     }
@@ -138,10 +192,9 @@ impl Tracker {
                     WorkStatus::Stopped
                 };
                 work.stage = stage.into();
-                work.finished_at = UNIX_EPOCH
-                    .elapsed()
-                    .ok()
-                    .map(|time| time.as_millis() as u64);
+                let now = timestamp().unwrap_or(work.started_at);
+                work.finished_at = Some(now.max(work.started_at));
+                work.close_stage(work.status, now);
                 snapshot.work.insert(0, work);
                 snapshot.trim_recent();
             }
@@ -190,6 +243,7 @@ mod tests {
                 model: None,
                 started_at: 0,
                 finished_at: None,
+                stages: Vec::new(),
             })
             .collect();
         let mut snapshot = ActivitySnapshot { revision: 0, work };
@@ -207,5 +261,41 @@ mod tests {
                 .iter()
                 .any(|item| item.id == RECENT_LIMIT.to_string())
         );
+    }
+
+    #[test]
+    fn timeline_closes_previous_stage_and_preserves_each_model() {
+        let mut work = Work {
+            id: "test".into(),
+            title: "Proposal".into(),
+            kind: WorkKind::Proposal,
+            status: WorkStatus::Running,
+            stage: "Starting".into(),
+            actor: None,
+            provider: None,
+            model: None,
+            started_at: 100,
+            finished_at: None,
+            stages: Vec::new(),
+        };
+        work.advance(
+            "Draft",
+            Some("Writer"),
+            Some((Provider::Ollama, "local-model")),
+            120,
+        );
+        work.advance(
+            "Review",
+            Some("Editor"),
+            Some((Provider::OpenAi, "hosted-model")),
+            160,
+        );
+        work.close_stage(WorkStatus::Stopped, 180);
+        assert!(work.stages[0].status == WorkStatus::Completed);
+        assert_eq!(work.stages[0].finished_at, Some(160));
+        assert_eq!(work.stages[0].model.as_deref(), Some("local-model"));
+        assert!(work.stages[1].status == WorkStatus::Stopped);
+        assert_eq!(work.stages[1].finished_at, Some(180));
+        assert_eq!(work.stages[1].actor.as_deref(), Some("Editor"));
     }
 }

@@ -521,7 +521,7 @@ function App() {
         {library && <div className="sidebar-bottom"><span title={library.root}>{library.root}</span><button onClick={() => reveal(library.root)}>Open in file manager</button></div>}
       </aside>
 
-      {workspaceView === 'activity' ? <AgentActivity {...activity} /> : workspaceView === 'workflows' ? <Workflows key={library?.root} libraryRoot={library?.root} skills={library?.skills ?? []} agents={library?.agents ?? []} openLibrary={chooseRoot} /> : workspaceView === 'knowledge' ? <Knowledge libraryRoot={library?.root} skills={library?.skills ?? []} desktop={isTauri()} /> : workspaceView === 'run' ?
+      {workspaceView === 'activity' ? <AgentActivity {...activity} openTests={() => { setTestAsset(null); setWorkspaceView('run') }} openWorkflows={() => setWorkspaceView('workflows')} /> : workspaceView === 'workflows' ? <Workflows key={library?.root} libraryRoot={library?.root} skills={library?.skills ?? []} agents={library?.agents ?? []} openLibrary={chooseRoot} /> : workspaceView === 'knowledge' ? <Knowledge libraryRoot={library?.root} skills={library?.skills ?? []} desktop={isTauri()} /> : workspaceView === 'run' ?
         <RunAndTest key={library?.root} libraryRoot={library?.root} skills={library?.skills ?? []} agents={library?.agents ?? []} initialAsset={testAsset} openLibrary={chooseRoot} /> : <section className="workspace">
         <header className="workspace-head">
           <div className="workspace-location"><span>{kind === 'skills' ? 'Skills' : 'Agents'} /</span><strong title={selectedCategory}>{selectedCategory.split('/').at(-1) || 'All folders'}</strong></div>

@@ -39,7 +39,7 @@ Install Git, Node.js LTS, Rust with the MSVC toolchain, Microsoft C++ Build Tool
 - Search a local document folder and generate cited answers with Ollama in Knowledge.
 - Test saved skills or agents with Ollama or OpenAI and reopen recent results with their exact Markdown snapshots in Run & Test.
 - Run a proposal workflow with a drafting skill, a review agent, and sources from a local document folder.
-- Watch active agent tests and workflow stages in **Agent Activity**, with their role, model, elapsed time, and session outcome.
+- Watch live run cards in **Agent Activity**. Select a card to inspect its step timeline, including the role, model, elapsed time, and outcome.
 
 Local Claude Code installation does not imply that a running session has loaded a capability. ZIP export requires manual upload for account-level Claude access. See [Capability Studio architecture](docs/CAPABILITY_STUDIO.md) for the product model and future extension seams.
 
