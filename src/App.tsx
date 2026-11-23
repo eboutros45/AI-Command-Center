@@ -5,6 +5,8 @@ import Knowledge from './Knowledge'
 import RunAndTest from './RunAndTest'
 import Workflows from './Workflows'
 import AgentCreator from './AgentCreator'
+import AgentActivity from './AgentActivity'
+import { useAgentActivity } from './useAgentActivity'
 import './App.css'
 import './Modal.css'
 
@@ -150,8 +152,10 @@ function App() {
   const [creationError, setCreationError] = useState('')
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [result, setResult] = useState<{ message: string; path: string } | null>(null)
-  const [workspaceView, setWorkspaceView] = useState<'knowledge' | 'run' | 'workflows' | null>(null)
+  const [workspaceView, setWorkspaceView] = useState<'knowledge' | 'run' | 'workflows' | 'activity' | null>(null)
   const [testAsset, setTestAsset] = useState<{ kind: 'skill' | 'agent'; path: string } | null>(null)
+  const activity = useAgentActivity(isTauri())
+  const activeCount = activity.work.filter(item => item.status === 'running').length
 
   const isDirty = Boolean(selected && draft !== selected.document.content)
 
@@ -503,6 +507,9 @@ function App() {
         <button className={`knowledge-nav ${workspaceView === 'knowledge' ? 'current' : ''}`} aria-pressed={workspaceView === 'knowledge'} onClick={() => setWorkspaceView('knowledge')}>Knowledge</button>
         <button className={`knowledge-nav ${workspaceView === 'run' ? 'current' : ''}`} aria-pressed={workspaceView === 'run'} onClick={() => { setTestAsset(null); setWorkspaceView('run') }}>Run &amp; Test</button>
         <button className={`knowledge-nav ${workspaceView === 'workflows' ? 'current' : ''}`} aria-pressed={workspaceView === 'workflows'} onClick={() => setWorkspaceView('workflows')}>Workflows</button>
+        <button className={`knowledge-nav activity-nav ${workspaceView === 'activity' ? 'current' : ''}`} aria-pressed={workspaceView === 'activity'} onClick={() => setWorkspaceView('activity')}>
+          Agent Activity{activeCount > 0 && <span className="activity-count" aria-label={`${activeCount} active`}>{activeCount}</span>}
+        </button>
         <div className="folder-scroll">
           {!workspaceView && <>
           <div className="pane-title"><span>Folders</span><button className="icon-button" aria-label="New folder" title="New folder" onClick={() => openCreationDialog('folder')} disabled={!library || busy}>+</button></div>
@@ -514,7 +521,7 @@ function App() {
         {library && <div className="sidebar-bottom"><span title={library.root}>{library.root}</span><button onClick={() => reveal(library.root)}>Open in file manager</button></div>}
       </aside>
 
-      {workspaceView === 'workflows' ? <Workflows key={library?.root} libraryRoot={library?.root} skills={library?.skills ?? []} agents={library?.agents ?? []} openLibrary={chooseRoot} /> : workspaceView === 'knowledge' ? <Knowledge libraryRoot={library?.root} skills={library?.skills ?? []} desktop={isTauri()} /> : workspaceView === 'run' ?
+      {workspaceView === 'activity' ? <AgentActivity {...activity} /> : workspaceView === 'workflows' ? <Workflows key={library?.root} libraryRoot={library?.root} skills={library?.skills ?? []} agents={library?.agents ?? []} openLibrary={chooseRoot} /> : workspaceView === 'knowledge' ? <Knowledge libraryRoot={library?.root} skills={library?.skills ?? []} desktop={isTauri()} /> : workspaceView === 'run' ?
         <RunAndTest key={library?.root} libraryRoot={library?.root} skills={library?.skills ?? []} agents={library?.agents ?? []} initialAsset={testAsset} openLibrary={chooseRoot} /> : <section className="workspace">
         <header className="workspace-head">
           <div className="workspace-location"><span>{kind === 'skills' ? 'Skills' : 'Agents'} /</span><strong title={selectedCategory}>{selectedCategory.split('/').at(-1) || 'All folders'}</strong></div>

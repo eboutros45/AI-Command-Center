@@ -430,8 +430,31 @@ pub(crate) async fn run_test(
         "Respond to the example input using the saved instructions below. This is a text-only preview. If the instructions call for tools or external actions, explain what additional access you would need.\n\n{}",
         asset.instructions()
     );
-    let output = generate(provider, &model, &system, &input).await?;
     let (id, timestamp) = run_identity()?;
+    let mut tracker = matches!(kind, RunKind::Agent).then(|| {
+        let tracker = crate::activity::Tracker::start(
+            &app,
+            &id,
+            timestamp,
+            asset.name.clone(),
+            crate::activity::WorkKind::AgentTest,
+        );
+        tracker.step(
+            "Generating a test response",
+            Some(&asset.name),
+            Some((provider, &model)),
+        );
+        tracker
+    });
+    let output = match generate(provider, &model, &system, &input).await {
+        Ok(output) => output,
+        Err(error) => {
+            if let Some(tracker) = &mut tracker {
+                tracker.finish(false, "Test stopped during generation");
+            }
+            return Err(error);
+        }
+    };
     let run = TestRun {
         id,
         timestamp,
@@ -447,12 +470,21 @@ pub(crate) async fn run_test(
         output,
         evaluation: None,
     };
-    tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         let save_error = save_run(&directory, &run.id, &run).err();
         RunResult { run, save_error }
     })
     .await
-    .map_err(super::err)
+    .map_err(super::err)?;
+    if let Some(tracker) = &mut tracker {
+        let label = if result.save_error.is_some() {
+            "Test completed · history could not be saved"
+        } else {
+            "Test completed"
+        };
+        tracker.finish(true, label);
+    }
+    Ok(result)
 }
 
 #[cfg(test)]

@@ -468,6 +468,8 @@ pub(crate) async fn run_proposal(
             asset.instructions()
         )
     };
+    let drafter_name = drafter.name.clone();
+    let reviewer_name = reviewer.as_ref().map(|reviewer| reviewer.name.clone());
     let drafter = context(drafter);
     let reviewer = reviewer.map(context).unwrap_or_default();
     if drafter.chars().count() > 9_000 || reviewer.chars().count() > 9_000 {
@@ -492,7 +494,27 @@ pub(crate) async fn run_proposal(
         steps: Vec::new(),
         proposal: None,
     };
-    let mut notify = |step| {
+    let mut tracker = crate::activity::Tracker::start(
+        &app,
+        &run.id,
+        timestamp,
+        "Proposal workflow".into(),
+        crate::activity::WorkKind::Proposal,
+    );
+    let mut notify = |step: Step| {
+        if step.status == Status::Running {
+            let (label, actor) = match step.stage {
+                Stage::Retrieve => ("Retrieving document sources", None),
+                Stage::Draft => ("Drafting the proposal", Some(drafter_name.as_str())),
+                Stage::Review => ("Reviewing the proposal", reviewer_name.as_deref()),
+                Stage::Revise => ("Revising the proposal", Some(drafter_name.as_str())),
+            };
+            let model = step
+                .execution
+                .as_ref()
+                .map(|target| (target.provider, target.model.as_str()));
+            tracker.step(label, actor, model);
+        }
         let _ = events.send(step);
     };
     let ready = retrieve_for_run(&mut run, &mut notify, setup.knowledge_folder, query).await;
@@ -508,12 +530,28 @@ pub(crate) async fn run_proposal(
         )
         .await;
     }
-    tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         let save_error = skill_runs::save_run(&directory, &run.id, &run).err();
         ProposalResult { run, save_error }
     })
     .await
-    .map_err(crate::err)
+    .map_err(crate::err)?;
+    let final_stage = match result
+        .run
+        .steps
+        .iter()
+        .find(|step| step.status == Status::Failed)
+        .map(|step| step.stage)
+    {
+        Some(Stage::Retrieve) => "Stopped during source retrieval",
+        Some(Stage::Draft) => "Stopped during drafting",
+        Some(Stage::Review) => "Stopped during review",
+        Some(Stage::Revise) => "Stopped during revision",
+        None if result.save_error.is_some() => "Proposal completed · history could not be saved",
+        None => "Proposal completed",
+    };
+    tracker.finish(result.run.proposal.is_some(), final_stage);
+    Ok(result)
 }
 
 async fn retrieve_for_run(

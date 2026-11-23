@@ -8,6 +8,7 @@ use std::{
 };
 use walkdir::WalkDir;
 
+mod activity;
 mod agent_creator;
 mod knowledge;
 mod ollama;
@@ -1152,7 +1153,9 @@ fn reveal_in_file_manager(path: String) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(activity::ActivityLedger::default())
         .invoke_handler(tauri::generate_handler![
+            activity::activity_snapshot,
             knowledge::search_knowledge,
             knowledge::answer_from_sources,
             skill_runs::run_test,
