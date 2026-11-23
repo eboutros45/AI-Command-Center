@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { evaluateSource } from './domain/quality'
 import Knowledge from './Knowledge'
 import RunAndTest from './RunAndTest'
+import Workflows from './Workflows'
 import './App.css'
 import './Modal.css'
 
@@ -152,7 +153,7 @@ function App() {
   const [creationError, setCreationError] = useState('')
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [result, setResult] = useState<{ message: string; path: string } | null>(null)
-  const [workspaceView, setWorkspaceView] = useState<'knowledge' | 'run' | null>(null)
+  const [workspaceView, setWorkspaceView] = useState<'knowledge' | 'run' | 'workflows' | null>(null)
   const [testAsset, setTestAsset] = useState<{ kind: 'skill' | 'agent'; path: string } | null>(null)
 
   const isDirty = Boolean(selected && draft !== selected.document.content)
@@ -507,6 +508,7 @@ function App() {
         </nav>
         <button className={`knowledge-nav ${workspaceView === 'knowledge' ? 'current' : ''}`} aria-pressed={workspaceView === 'knowledge'} onClick={() => setWorkspaceView('knowledge')}>Knowledge</button>
         <button className={`knowledge-nav ${workspaceView === 'run' ? 'current' : ''}`} aria-pressed={workspaceView === 'run'} onClick={() => { setTestAsset(null); setWorkspaceView('run') }}>Run &amp; Test</button>
+        <button className={`knowledge-nav ${workspaceView === 'workflows' ? 'current' : ''}`} aria-pressed={workspaceView === 'workflows'} onClick={() => setWorkspaceView('workflows')}>Workflows</button>
         <div className="folder-scroll">
           {!workspaceView && <>
           <div className="pane-title"><span>Folders</span><button className="icon-button" aria-label="New folder" title="New folder" onClick={() => openCreationDialog('folder')} disabled={!library || busy}>+</button></div>
@@ -518,7 +520,7 @@ function App() {
         {library && <div className="sidebar-bottom"><span title={library.root}>{library.root}</span><button onClick={() => reveal(library.root)}>Open in file manager</button></div>}
       </aside>
 
-      {workspaceView === 'knowledge' ? <Knowledge libraryRoot={library?.root} skills={library?.skills ?? []} desktop={isTauri()} /> : workspaceView === 'run' ?
+      {workspaceView === 'workflows' ? <Workflows key={library?.root} libraryRoot={library?.root} skills={library?.skills ?? []} agents={library?.agents ?? []} openLibrary={chooseRoot} /> : workspaceView === 'knowledge' ? <Knowledge libraryRoot={library?.root} skills={library?.skills ?? []} desktop={isTauri()} /> : workspaceView === 'run' ?
         <RunAndTest key={library?.root} libraryRoot={library?.root} skills={library?.skills ?? []} agents={library?.agents ?? []} initialAsset={testAsset} openLibrary={chooseRoot} /> : <section className="workspace">
         <header className="workspace-head">
           <div className="workspace-location"><span>{kind === 'skills' ? 'Skills' : 'Agents'} /</span><strong title={selectedCategory}>{selectedCategory.split('/').at(-1) || 'All folders'}</strong></div>

@@ -38,6 +38,7 @@ Install Git, Node.js LTS, Rust with the MSVC toolchain, Microsoft C++ Build Tool
 - Install agents as verified Markdown copies to personal or project Claude Code locations.
 - Search a local document folder and generate cited answers with Ollama in Knowledge.
 - Test saved skills or agents with Ollama or OpenAI and reopen recent results with their exact Markdown snapshots in Run & Test.
+- Run a proposal workflow with a drafting skill, a review agent, and sources from a local document folder.
 
 Local Claude Code installation does not imply that a running session has loaded a capability. ZIP export requires manual upload for account-level Claude access. See [Capability Studio architecture](docs/CAPABILITY_STUDIO.md) for the product model and future extension seams.
 
@@ -62,3 +63,7 @@ npm run tauri dev
 ```
 
 The app sends test inputs and saved instructions to OpenAI when you select **Run with OpenAI**. API usage may incur charges.
+
+## Try Workflows
+
+Open **Workflows**, enter a proposal brief and a document folder, then provide source search terms. Assign a saved drafting skill and review agent from your library, choose a model, and run the template. It retrieves excerpts, drafts a proposal, requests a review, and optionally revises once. Expand each step to inspect its output and the retrieved citations. Recent runs include stopped runs and are saved with the brief, source excerpts, and role snapshots on this device.

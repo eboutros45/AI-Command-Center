@@ -67,30 +67,35 @@ pub(crate) struct RunResult {
     save_error: Option<String>,
 }
 
-fn history_directory(app_data: &Path, library: &str) -> Result<PathBuf, String> {
+pub(crate) fn history_directory(
+    app_data: &Path,
+    library: &str,
+    category: &str,
+) -> Result<PathBuf, String> {
     let root = super::canonical_dir(Path::new(library))?;
     Ok(app_data
-        .join("skill-runs")
+        .join(category)
         .join(super::fingerprint(&root.to_string_lossy())))
 }
 
-fn save_run(directory: &Path, run: &TestRun) -> Result<(), String> {
+pub(crate) fn save_run(directory: &Path, id: &str, run: &impl Serialize) -> Result<(), String> {
     let bytes = serde_json::to_vec(run).map_err(super::err)?;
     fs::create_dir_all(directory).map_err(super::err)?;
-    let temporary = directory.join(format!("{}.tmp", run.id));
+    let temporary = directory.join(format!("{id}.tmp"));
     let result = {
         let mut file = fs::File::create_new(&temporary).map_err(super::err)?;
         file.write_all(&bytes).and_then(|()| file.sync_all())
     };
-    let result =
-        result.and_then(|()| fs::rename(&temporary, directory.join(format!("{}.json", run.id))));
+    let result = result.and_then(|()| fs::rename(&temporary, directory.join(format!("{id}.json"))));
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
     result.map_err(super::err)
 }
 
-fn recent_runs(directory: &Path) -> Result<Vec<TestRun>, String> {
+pub(crate) fn recent_runs<T: serde::de::DeserializeOwned>(
+    directory: &Path,
+) -> Result<Vec<T>, String> {
     let entries = match fs::read_dir(directory) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -124,18 +129,31 @@ pub(crate) async fn list_runs(
 ) -> Result<Vec<TestRun>, String> {
     let app_data = app.path().app_data_dir().map_err(super::err)?;
     tauri::async_runtime::spawn_blocking(move || {
-        recent_runs(&history_directory(&app_data, &library_root)?)
+        recent_runs(&history_directory(&app_data, &library_root, "skill-runs")?)
     })
     .await
     .map_err(super::err)?
 }
 
-struct AssetSnapshot {
-    name: String,
+pub(crate) struct AssetSnapshot {
+    pub(crate) name: String,
     path: String,
-    fingerprint: String,
+    pub(crate) fingerprint: String,
     source: String,
     referenced_skills: Vec<ReferencedSkill>,
+}
+
+impl AssetSnapshot {
+    pub(crate) fn instructions(&self) -> String {
+        let mut instructions = self.source.clone();
+        for skill in &self.referenced_skills {
+            instructions.push_str(&format!(
+                "\n\nReferenced skill: {}\n\n{}",
+                skill.name, skill.source
+            ));
+        }
+        instructions
+    }
 }
 
 fn read_skill_snapshot(root: &str, path: &str) -> Result<AssetSnapshot, String> {
@@ -180,7 +198,11 @@ fn referenced_skill<'a>(
     Ok(skill)
 }
 
-fn load_snapshot(root: &str, path: &str, kind: RunKind) -> Result<AssetSnapshot, String> {
+pub(crate) fn load_snapshot(
+    root: &str,
+    path: &str,
+    kind: RunKind,
+) -> Result<AssetSnapshot, String> {
     match kind {
         RunKind::Skill => read_skill_snapshot(root, path),
         RunKind::Agent => {
@@ -227,6 +249,27 @@ fn load_snapshot(root: &str, path: &str, kind: RunKind) -> Result<AssetSnapshot,
     }
 }
 
+pub(crate) async fn generate(
+    provider: Provider,
+    model: &str,
+    system: &str,
+    input: &str,
+) -> Result<String, String> {
+    match provider {
+        Provider::Ollama => super::ollama::generate(model, system, input).await,
+        Provider::OpenAi => super::openai::generate(model, system, input).await,
+    }
+}
+
+pub(crate) fn run_identity() -> Result<(String, u64), String> {
+    let timestamp = UNIX_EPOCH.elapsed().map_err(super::err)?.as_millis() as u64;
+    let sequence = RUN_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    Ok((
+        format!("{timestamp:020}-{:010}-{sequence:020}", std::process::id()),
+        timestamp,
+    ))
+}
+
 #[tauri::command]
 pub(crate) async fn run_test(
     app: tauri::AppHandle,
@@ -243,7 +286,7 @@ pub(crate) async fn run_test(
     }
     let app_data = app.path().app_data_dir().map_err(super::err)?;
     let (directory, asset) = tauri::async_runtime::spawn_blocking(move || {
-        let directory = history_directory(&app_data, &library_root)?;
+        let directory = history_directory(&app_data, &library_root, "skill-runs")?;
         let asset = load_snapshot(&library_root, &asset_path, kind)?;
         Ok::<_, String>((directory, asset))
     })
@@ -256,24 +299,14 @@ pub(crate) async fn run_test(
     if model.is_empty() || model.len() > 150 {
         return Err("Enter a model name up to 150 bytes.".into());
     }
-    let mut system = format!(
+    let system = format!(
         "Respond to the example input using the saved instructions below. This is a text-only preview. If the instructions call for tools or external actions, explain what additional access you would need.\n\n{}",
-        asset.source
+        asset.instructions()
     );
-    for skill in &asset.referenced_skills {
-        system.push_str(&format!(
-            "\n\nReferenced skill: {}\n\n{}",
-            skill.name, skill.source
-        ));
-    }
-    let output = match provider {
-        Provider::Ollama => super::ollama::generate(&model, &system, &input).await?,
-        Provider::OpenAi => super::openai::generate(&model, &system, &input).await?,
-    };
-    let timestamp = UNIX_EPOCH.elapsed().map_err(super::err)?.as_millis() as u64;
-    let sequence = RUN_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let output = generate(provider, &model, &system, &input).await?;
+    let (id, timestamp) = run_identity()?;
     let run = TestRun {
-        id: format!("{timestamp:020}-{:010}-{sequence:020}", std::process::id()),
+        id,
         timestamp,
         kind,
         provider,
@@ -287,7 +320,7 @@ pub(crate) async fn run_test(
         output,
     };
     tauri::async_runtime::spawn_blocking(move || {
-        let save_error = save_run(&directory, &run).err();
+        let save_error = save_run(&directory, &run.id, &run).err();
         RunResult { run, save_error }
     })
     .await
@@ -383,7 +416,7 @@ mod tests {
                     input: "First draft".into(),
                     output: "First review".into(),
                 };
-                save_run(&directory, &run)?;
+                save_run(&directory, &run.id, &run)?;
                 fs::write(directory.join("incomplete.tmp"), "{").map_err(super::super::err)?;
                 recent_runs(&directory)
             };

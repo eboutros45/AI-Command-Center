@@ -8,7 +8,7 @@ const MAX_ENTRIES: usize = 2_000;
 const MAX_EXCERPTS: usize = 6;
 const CHUNK_CHARS: usize = 900;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Excerpt {
     path: String,
@@ -17,10 +17,10 @@ pub(crate) struct Excerpt {
     text: String,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SearchResult {
-    excerpts: Vec<Excerpt>,
+    pub(crate) excerpts: Vec<Excerpt>,
     files_searched: usize,
     skipped_files: usize,
     limited: bool,

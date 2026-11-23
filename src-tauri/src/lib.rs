@@ -12,6 +12,7 @@ mod knowledge;
 mod ollama;
 mod openai;
 mod skill_runs;
+mod workflows;
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -1213,6 +1214,8 @@ pub fn run() {
             knowledge::answer_from_sources,
             skill_runs::run_test,
             skill_runs::list_runs,
+            workflows::run_proposal,
+            workflows::list_proposals,
             scan_library,
             read_skill,
             save_skill,
