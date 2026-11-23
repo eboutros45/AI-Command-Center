@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { evaluateSource } from './domain/quality'
 import './App.css'
@@ -61,6 +61,14 @@ type Confirmation = {
   tone?: 'default' | 'danger'
   action: () => void | Promise<void>
 }
+type PathAction = {
+  title: string
+  description: string
+  label: string
+  submit: string
+  initialValue?: string
+  run: (path: string) => Promise<void>
+}
 
 const TOOL_OPTIONS = ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash', 'WebSearch', 'WebFetch']
 const SKILL_RECIPES = [
@@ -72,6 +80,49 @@ const SKILL_RECIPES = [
 ]
 const isTauri = () => '__TAURI_INTERNALS__' in window
 const slugify = (value: string) => value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
+
+function PathDialog({ action, onClose }: { action: PathAction; onClose: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null)
+  const [value, setValue] = useState(action.initialValue ?? '')
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    dialog.current?.showModal()
+  }, [])
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    if (pending || !value.trim()) return
+    setPending(true)
+    setError('')
+    try {
+      await action.run(value.trim().replace(/^"(.+)"$/, '$1'))
+      onClose()
+    } catch (failure) {
+      setError(String(failure))
+      setPending(false)
+    }
+  }
+
+  return (
+    <dialog ref={dialog} className="modal path-dialog" aria-labelledby="path-action-title" onCancel={event => {
+      event.preventDefault()
+      if (!pending) onClose()
+    }}>
+      <form onSubmit={submit}>
+        <h2 id="path-action-title">{action.title}</h2>
+        <p>{action.description}</p>
+        <label>{action.label}<input autoFocus value={value} onChange={event => setValue(event.target.value)} disabled={pending} required /></label>
+        {error && <p className="action-error" role="alert">{error}</p>}
+        <div className="modal-actions">
+          <button type="button" disabled={pending} onClick={onClose}>Cancel</button>
+          <button className="primary" type="submit" disabled={pending || !value.trim()}>{pending ? 'Working…' : action.submit}</button>
+        </div>
+      </form>
+    </dialog>
+  )
+}
 
 function App() {
   const [library, setLibrary] = useState<Library | null>(null)
@@ -95,19 +146,25 @@ function App() {
   const [agentTools, setAgentTools] = useState<string[]>(['Read', 'Grep', 'Glob'])
   const [agentSkills, setAgentSkills] = useState<string[]>([])
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null)
-  const [libraryPathDialog, setLibraryPathDialog] = useState(false)
-  const [libraryPath, setLibraryPath] = useState('')
+  const [pathAction, setPathAction] = useState<PathAction | null>(null)
+  const [creationError, setCreationError] = useState('')
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  const [result, setResult] = useState<{ message: string; path: string } | null>(null)
 
   const isDirty = Boolean(selected && draft !== selected.document.content)
+
+  const scan = async (root: string) => {
+      const next = await invoke<Library>('scan_library', { root })
+      setLibrary(next)
+      localStorage.setItem('libraryRoot', root)
+      setNotice(`Indexed ${next.skills.length} skills and ${next.agents.length} agents.`)
+  }
 
   const refresh = async (root = library?.root) => {
     if (!root || !isTauri()) return
     setBusy(true)
     try {
-      const next = await invoke<Library>('scan_library', { root })
-      setLibrary(next)
-      localStorage.setItem('libraryRoot', root)
-      setNotice(`Indexed ${next.skills.length} skills and ${next.agents.length} agents.`)
+      await scan(root)
     } catch (error) {
       setNotice(String(error))
     } finally {
@@ -129,26 +186,25 @@ function App() {
   }
 
   const chooseRoot = async () => {
-    const perform = () => {
-      setLibraryPath(library?.root ?? '')
-      setLibraryPathDialog(true)
-    }
+    const perform = () => setPathAction({
+      title: 'Open a local library',
+      description: 'Paste the full path of an existing folder for your skills and agents.',
+      label: 'Library folder',
+      submit: 'Open library',
+      initialValue: library?.root,
+      run: async path => {
+        await scan(path)
+        setSelected(null)
+        setDraft('')
+        setSelectedCategory('')
+        setCollapsed(new Set())
+        setQuery('')
+        setResult(null)
+      },
+    })
     if (isDirty) {
       askConfirmation({ title: 'Leave unsaved changes?', body: 'Changing libraries will discard the current editor draft.', confirmLabel: 'Discard and continue', tone: 'danger', action: perform })
     } else await perform()
-  }
-
-  const loadLibraryPath = async (event: FormEvent) => {
-    event.preventDefault()
-    const path = libraryPath.trim()
-    if (!path) {
-      setNotice('Enter the full path to an existing library folder.')
-      return
-    }
-    setLibraryPathDialog(false)
-    setSelected(null)
-    setDraft('')
-    await refresh(path)
   }
 
   const loadAsset = async (assetKind: AssetKind, asset: AssetSummary) => {
@@ -210,6 +266,13 @@ function App() {
   }
 
   const openCreationDialog = (type: Exclude<CreationDialog, null>) => {
+    if (type !== 'folder' && isDirty) {
+      askConfirmation({ title: 'Discard editor changes?', body: 'Creating a new item will open it in the editor.', confirmLabel: 'Continue', tone: 'danger', action: () => startCreation(type) })
+    } else startCreation(type)
+  }
+
+  const startCreation = (type: Exclude<CreationDialog, null>) => {
+    setCreationError('')
     setCreationName('')
     setCreationDescription('')
     setCreationTemplate(type === 'agent' ? 'specialist' : 'general')
@@ -225,14 +288,16 @@ function App() {
 
   const createItem = async (event: FormEvent) => {
     event.preventDefault()
-    if (!library || !creationDialog) return
+    if (!library || !creationDialog || busy) return
     const name = creationName.trim()
     const description = creationDescription.trim()
     if (!name || (creationDialog !== 'folder' && !description)) return
     setBusy(true)
+    setCreationError('')
     try {
       if (creationDialog === 'folder') {
         await invoke(kind === 'skills' ? 'create_category' : 'create_agent_category', { root: library.root, parent: selectedCategory, name })
+        setSelectedCategory([selectedCategory, slugify(name)].filter(Boolean).join('/'))
         setNotice(`Created folder “${name}”.`)
       } else if (creationDialog === 'skill') {
         const skill = await invoke<SkillSummary>('create_skill', {
@@ -251,6 +316,7 @@ function App() {
         setCreationDialog(null)
         await refresh()
         await loadAsset('skills', skill)
+        setTab('source')
         return
       } else {
         const agent = await invoke<AgentSummary>('create_agent', {
@@ -271,7 +337,7 @@ function App() {
       setCreationDialog(null)
       await refresh()
     } catch (error) {
-      setNotice(String(error))
+      setCreationError(String(error))
     } finally {
       setBusy(false)
     }
@@ -304,46 +370,65 @@ function App() {
     }
   }
 
-  const importSkill = async () => {
+  const importSkill = () => {
     if (!library) return
-    setNotice('Import is temporarily unavailable while native dialogs are disabled on this Windows setup.')
+    setPathAction({
+      title: 'Import a skill',
+      description: `Copy a folder containing SKILL.md into ${selectedCategory || 'the library root'}.`,
+      label: 'Source skill folder',
+      submit: 'Import skill',
+      run: async source => {
+        const path = await invoke<string>('import_skill', { root: library.root, category: selectedCategory, source })
+        setResult({ message: 'Skill imported', path })
+        await refresh()
+      },
+    })
   }
 
-  const exportZip = async () => {
+  const exportZip = () => {
     if (!selected || selected.kind !== 'skills' || !library) return
-    const destination = `${library.root}\\${selected.document.name}.zip`
-    try {
-      await invoke('export_skill_zip', { root: library.root, skillPath: selected.document.path, destination })
-      setNotice('ZIP exported for manual Claude upload.')
-    } catch (error) {
-      setNotice(String(error))
-    }
+    setPathAction({
+      title: 'Export skill as ZIP',
+      description: 'Choose an existing folder for the archive. The ZIP takes its name from the skill folder.',
+      label: 'Destination folder',
+      submit: 'Export ZIP',
+      initialValue: library.root,
+      run: async destinationFolder => {
+        const path = await invoke<string>('export_skill_zip', { root: library.root, skillPath: selected.document.path, destinationFolder })
+        setResult({ message: 'ZIP exported', path })
+      },
+    })
   }
 
-  const install = async (scope: 'personal' | 'project') => {
+  const install = (scope: 'personal' | 'project') => {
     if (!selected || !library) return
-    let projectRoot: string | null = null
+    const run = async (projectRoot: string | null) => {
+      const isSkill = selected.kind === 'skills'
+      const command = isSkill ? 'install_skill' : 'install_agent'
+      const args = isSkill
+        ? { root: library.root, skillPath: selected.document.path, scope, projectRoot }
+        : { root: library.root, agentPath: selected.document.path, scope, projectRoot }
+      const path = await invoke<string>(command, args)
+      setResult({ message: 'Installed for Claude Code', path })
+    }
     if (scope === 'project') {
-      setNotice('Project installation is temporarily unavailable while native dialogs are disabled on this Windows setup.')
+      setPathAction({
+        title: 'Install in a project',
+        description: `Install “${selected.document.name}” into the project's .claude/${selected.kind} folder.`,
+        label: 'Project folder',
+        submit: 'Install in project',
+        run,
+      })
       return
     }
-    const assetLabel = selected.kind === 'skills' ? 'skill' : 'agent'
     askConfirmation({
-      title: `Install ${assetLabel} to Claude Code?`,
-      body: scope === 'personal'
-        ? `This will make “${selected.document.name}” available across local Claude Code projects.`
-        : `This will make “${selected.document.name}” available in the selected project.`,
+      title: 'Install for all local projects?',
+      body: `This will make “${selected.document.name}” available across local Claude Code projects.`,
       confirmLabel: 'Install',
       action: async () => {
         setBusy(true)
         try {
-          const isSkill = selected.kind === 'skills'
-          const command = isSkill ? 'install_skill' : 'install_agent'
-          const args = isSkill
-            ? { root: library.root, skillPath: selected.document.path, scope, projectRoot }
-            : { root: library.root, agentPath: selected.document.path, scope, projectRoot }
-          const path = await invoke<string>(command, args)
-          setNotice(`Installed locally at ${path}`)
+          await run(null)
         } catch (error) {
           setNotice(String(error))
         } finally {
@@ -353,10 +438,9 @@ function App() {
     })
   }
 
-  const reveal = async () => {
-    if (!library) return
+  const reveal = async (path: string) => {
     try {
-      await invoke('reveal_in_file_manager', { path: selected?.document.path ?? library.root })
+      await invoke('reveal_in_file_manager', { path })
     } catch (error) {
       setNotice(String(error))
     }
@@ -366,7 +450,7 @@ function App() {
   const categories = useMemo(() => kind === 'skills' ? (library?.categories ?? []) : (library?.agentCategories ?? []), [kind, library])
   const filtered = useMemo(() => summaries.filter(asset => {
     const categoryMatch = !selectedCategory || asset.relativePath.startsWith(`${selectedCategory}/`)
-    const search = query.toLowerCase()
+    const search = query.trim().toLowerCase()
     return categoryMatch && (!search || `${asset.name} ${asset.description}`.toLowerCase().includes(search))
   }), [summaries, query, selectedCategory])
 
@@ -374,51 +458,73 @@ function App() {
     ? evaluateSource(selected.kind === 'skills' ? 'skill' : 'agent', draft, library?.skills.map(item => item.name) ?? [])
     : null, [selected, draft, library])
 
-  const renderCategories = (items: Category[], depth = 0): React.ReactNode => items.map(category => (
-    <div key={category.path}>
-      <button className={`tree-item ${selectedCategory === category.relativePath ? 'active' : ''}`} style={{ paddingLeft: 16 + depth * 14 }} onClick={() => setSelectedCategory(category.relativePath)}>
-        <span>›</span> {category.name}
-      </button>
-      {renderCategories(category.children, depth + 1)}
-    </div>
-  ))
+  const renderCategories = (items: Category[]): React.ReactNode => (
+    <ul className="folder-branch">
+      {items.map(category => {
+        const key = `${kind}/${category.relativePath}`
+        const active = selectedCategory === category.relativePath
+        const expanded = !collapsed.has(key)
+        const count = summaries.filter(asset => asset.relativePath.startsWith(`${category.relativePath}/`)).length
+        return <li key={key}>
+          <div className={`folder-row ${active ? 'current' : ''}`}>
+            {category.children.length > 0
+              ? <button type="button" className="folder-toggle" aria-label={`${expanded ? 'Collapse' : 'Expand'} ${category.name}`} aria-expanded={expanded} onClick={() => setCollapsed(previous => {
+                const next = new Set(previous)
+                if (next.has(key)) next.delete(key)
+                else next.add(key)
+                return next
+              })}>{expanded ? '⌄' : '›'}</button>
+              : <span className="folder-toggle" aria-hidden="true">·</span>}
+            <button className="folder-select" aria-current={active ? 'true' : undefined} title={category.relativePath} onClick={() => setSelectedCategory(category.relativePath)}>
+              <span className="folder-icon" aria-hidden="true" /><span>{category.name}</span><small>{count}</small>
+            </button>
+          </div>
+          {expanded && category.children.length > 0 && renderCategories(category.children)}
+        </li>
+      })}
+    </ul>
+  )
 
   const agent = selected?.kind === 'agents' ? selected.document as AgentDocument : null
   const skill = selected?.kind === 'skills' ? selected.document as SkillDocument : null
 
   return (
     <main className="app-shell">
-      <header>
-        <div className="brand"><span className="mark">AI</span><div><h1>Command Center</h1><p>Capability Studio</p></div></div>
-        <nav className="kind-switch" aria-label="Studio type">
+      <aside className="folders">
+        <div className="brand"><span className="mark" aria-hidden="true">✳</span><div><h1>Command Center</h1><p>Local workspace</p></div></div>
+        <button className="library-switch" onClick={chooseRoot} disabled={busy}>
+          <span className="folder-icon" aria-hidden="true" />
+          <span><strong>{library ? library.root.split(/[\\/]/).filter(Boolean).at(-1) : 'Choose library'}</strong><small>{library ? 'Change library' : 'Open a folder on this device'}</small></span>
+          <b aria-hidden="true">⌄</b>
+        </button>
+        <nav className="kind-switch" aria-label="Library type">
           <button className={kind === 'skills' ? 'active' : ''} onClick={() => switchKind('skills')}>Skills <span>{library?.skills.length ?? 0}</span></button>
           <button className={kind === 'agents' ? 'active' : ''} onClick={() => switchKind('agents')}>Agents <span>{library?.agents.length ?? 0}</span></button>
-          <button disabled title="Knowledge and RAG support is planned for a future release">Knowledge <small>Soon</small></button>
         </nav>
-        <div className="header-actions"><button onClick={chooseRoot}>{library ? 'Change Library' : 'Choose Library'}</button><button onClick={() => refresh()} disabled={!library || busy}>↻ Refresh</button></div>
-      </header>
-
-      <section className="toolbar">
-        <button className="primary" onClick={() => openCreationDialog(kind === 'skills' ? 'skill' : 'agent')} disabled={!library}>＋ New {kind === 'skills' ? 'Skill' : 'Agent'}</button>
-        <button onClick={() => openCreationDialog('folder')} disabled={!library}>New Folder</button>
-        {kind === 'skills' && <button onClick={importSkill} disabled={!library}>Import Skill</button>}
-        {kind === 'skills' && <button onClick={seedStarters} disabled={!library || busy}>Add Starters</button>}
-        {kind === 'agents' && <button onClick={seedStarterAgents} disabled={!library || busy}>Add Starters</button>}
-        <button onClick={reveal} disabled={!library}>Reveal in Finder</button>
-        <input aria-label={`Search ${kind}`} placeholder={`Search ${kind}…`} value={query} onChange={event => setQuery(event.target.value)} />
-      </section>
+        <div className="folder-scroll">
+          <div className="pane-title"><span>Folders</span><button className="icon-button" aria-label="New folder" title="New folder" onClick={() => openCreationDialog('folder')} disabled={!library || busy}>+</button></div>
+          <button className={`all-folders ${!selectedCategory ? 'current' : ''}`} aria-current={!selectedCategory ? 'true' : undefined} onClick={() => setSelectedCategory('')}><span aria-hidden="true">▦</span> All {kind}<small>{summaries.length}</small></button>
+          {renderCategories(categories)}
+          {library && categories.length === 0 && <p className="sidebar-hint">Use + to add a folder.</p>}
+        </div>
+        {library && <div className="sidebar-bottom"><span title={library.root}>{library.root}</span><button onClick={() => reveal(library.root)}>Open in file manager</button></div>}
+      </aside>
 
       <section className="workspace">
-        <aside className="folders">
-          <div className="pane-title"><span>{kind === 'skills' ? 'Skill folders' : 'Agent folders'}</span></div>
-          <button className={`tree-item ${selectedCategory === '' ? 'active' : ''}`} onClick={() => setSelectedCategory('')}><span>⌄</span> All {kind === 'skills' ? 'Skills' : 'Agents'}</button>
-          {renderCategories(categories)}
-          {kind === 'agents' && categories.length === 0 && library && <p className="sidebar-hint">Agent categories are real folders under <code>agents/</code>.</p>}
-          <div className="root-path">{library?.root ?? 'No library selected'}</div>
-        </aside>
-
+        <header className="workspace-head">
+          <div className="workspace-location"><span>{kind === 'skills' ? 'Skills' : 'Agents'} /</span><strong title={selectedCategory}>{selectedCategory.split('/').at(-1) || 'All folders'}</strong></div>
+          {library && <div className="header-actions">
+            <button className="icon-button" aria-label="Refresh library" title="Refresh library" disabled={busy} onClick={() => refresh()}>↻</button>
+            <button onClick={kind === 'skills' ? seedStarters : seedStarterAgents} disabled={busy}>Add starters</button>
+            {kind === 'skills' && <button onClick={importSkill} disabled={busy}>Import skill</button>}
+            <button className="primary" onClick={() => openCreationDialog(kind === 'skills' ? 'skill' : 'agent')} disabled={busy}>+ New {kind === 'skills' ? 'skill' : 'agent'}</button>
+          </div>}
+        </header>
         <aside className="assets">
-          <div className="pane-title"><span>{kind === 'skills' ? 'Skills' : 'Agents'}</span><span>{filtered.length}</span></div>
+          <div className="list-header">
+            <div><h2>{kind === 'skills' ? 'Skills' : 'Agents'}</h2><span>{filtered.length} {filtered.length === 1 ? 'item' : 'items'}</span></div>
+            <input type="search" aria-label={`Search ${kind}`} placeholder={`Search ${kind}…`} value={query} onChange={event => setQuery(event.target.value)} disabled={!library} />
+          </div>
           {filtered.map((asset, index) => {
             const itemAgent = kind === 'agents' ? asset as AgentSummary : null
             return <button key={asset.path} className={`asset-card ${selected?.document.path === asset.path ? 'selected' : ''}`} style={{ '--item-index': index } as CSSProperties} onClick={() => requestLoadAsset(kind, asset)}>
@@ -427,7 +533,7 @@ function App() {
               <small>{itemAgent ? `${itemAgent.model || 'inherit'} · ${itemAgent.tools.length} tools` : asset.relativePath}</small>
             </button>
           })}
-          {library && filtered.length === 0 && <div className="empty"><strong>No {kind} here yet</strong><p>Create one or change the selected folder.</p></div>}
+          {library && filtered.length === 0 && <div className="empty"><strong>{query.trim() ? 'No matching results' : `No ${kind} here yet`}</strong><p>{query.trim() ? 'Try a different search.' : 'Create an item or choose another folder.'}</p></div>}
         </aside>
 
         <article className="studio">
@@ -460,7 +566,7 @@ function App() {
             </section>}
 
             {tab === 'files' && <section className="tab-panel files-panel">
-              <div className="section-heading"><div><h3>Package files</h3><p>Supporting material remains beside the canonical instructions.</p></div><button onClick={reveal}>Reveal package</button></div>
+              <div className="section-heading"><div><h3>Package files</h3><p>Supporting material remains beside the canonical instructions.</p></div><button onClick={() => reveal(selected.document.path)}>Open in file manager</button></div>
               {skill ? <div className="file-list">{skill.files.map(file => <div key={file}><span className="file-icon">{file.endsWith('/') ? '▱' : '◇'}</span><code>{file}</code>{file === 'SKILL.md' && <small>Entry point</small>}</div>)}</div> : <div className="agent-file-note"><strong>Single-file agent definition</strong><p>Claude Code agents are portable Markdown files. Future Knowledge sources and resources will attach here without changing the agent’s canonical source.</p><code>{selected.document.path.split('/').pop()}</code></div>}
             </section>}
 
@@ -471,14 +577,16 @@ function App() {
             </section>}
 
             {tab === 'publish' && <section className="tab-panel publish-panel">
-              <div className="publish-hero"><div className="publish-icon">↗</div><div><h3>Publish to Claude Code</h3><p>{selected.kind === 'skills' ? 'Skills install as reversible links to this canonical library package.' : 'Agents install as verified Markdown copies because Claude does not formally guarantee agent-file symlinks.'}</p></div></div>
-              <div className="publish-options"><button onClick={() => install('personal')} disabled={selected.document.status !== 'valid'}><strong>Personal installation</strong><span>Available across local projects</span></button><button onClick={() => install('project')} disabled={selected.document.status !== 'valid'}><strong>Project installation</strong><span>Choose a specific repository</span></button>{selected.kind === 'skills' && <button onClick={exportZip} disabled={selected.document.status !== 'valid'}><strong>Export ZIP</strong><span>For manual Claude account upload</span></button>}</div>
+              <div className="publish-hero"><div className="publish-icon" aria-hidden="true">↑</div><div><h3>Publish to Claude</h3><p>{selected.kind === 'skills' ? 'Install locally in Claude Code, or export an archive for manual upload. Windows uses a copy if it cannot create a skill link.' : 'Install a Markdown copy of this agent in Claude Code.'}</p></div></div>
+              {isDirty && <p className="action-error">Save your source changes before publishing.</p>}
+              {selected.document.status !== 'valid' && <p className="action-error">Fix the source validation errors before publishing.</p>}
+              <fieldset className="publish-options" disabled={busy || isDirty || selected.document.status !== 'valid'} aria-label="Publish options"><button onClick={() => install('personal')}><strong>Personal installation</strong><span>Available across local projects</span></button><button onClick={() => install('project')}><strong>Project installation</strong><span>Choose a specific repository</span></button>{selected.kind === 'skills' && <button onClick={exportZip}><strong>Export ZIP</strong><span>Save a portable skill archive</span></button>}</fieldset>
             </section>}
           </> : <div className="welcome"><div className="welcome-icon">{kind === 'skills' ? '⌘' : '◎'}</div><h2>{library ? `Select a${kind === 'agents' ? 'n' : ''} ${kind.slice(0, -1)}` : 'Your capabilities, on your disk'}</h2><p>{library ? `Choose a ${kind.slice(0, -1)} to inspect, improve, and publish it.` : 'Choose a local folder. Command Center keeps portable skills and agents as ordinary files you own.'}</p>{!library ? <button className="primary" onClick={chooseRoot}>Choose Capability Library</button> : <button className="primary" onClick={() => openCreationDialog(kind === 'skills' ? 'skill' : 'agent')}>Create {kind === 'skills' ? 'Skill' : 'Agent'}</button>}</div>}
         </article>
       </section>
 
-      {creationDialog && <div className="modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setCreationDialog(null) }}>
+      {creationDialog && <div className="modal-backdrop" role="presentation">
         <form className="modal creation-modal" role="dialog" aria-modal="true" aria-labelledby="creation-title" onSubmit={createItem}>
           <div className="eyebrow">{creationDialog === 'skill' ? 'New portable skill' : creationDialog === 'agent' ? 'New custom agent' : 'New category'}</div>
           <h2 id="creation-title">{creationDialog === 'skill' ? 'Create a skill' : creationDialog === 'agent' ? 'Create an agent' : 'Create a folder'}</h2>
@@ -487,7 +595,7 @@ function App() {
           {creationName && <div className="path-preview">{creationDialog === 'agent' || (creationDialog === 'folder' && kind === 'agents') ? 'agents/' : ''}{selectedCategory ? `${selectedCategory}/` : ''}{slugify(creationName)}{creationDialog === 'agent' ? '.md' : ''}</div>}
           {creationDialog !== 'folder' && <label>Description<textarea value={creationDescription} onChange={event => setCreationDescription(event.target.value)} placeholder="What does it do, and when should Claude use it?" rows={3} /></label>}
           {creationDialog === 'skill' && <>
-            <fieldset className="recipe-picker"><legend>Start from a recipe</legend><div className="recipe-grid">{SKILL_RECIPES.map(recipe => <button type="button" key={recipe.id} className={creationTemplate === recipe.id ? 'recipe selected' : 'recipe'} onClick={() => setCreationTemplate(recipe.id)}><strong>{recipe.title}</strong><span>{recipe.detail}</span></button>)}</div></fieldset>
+            <fieldset className="recipe-picker"><legend>Start from a recipe</legend><div className="recipe-grid">{SKILL_RECIPES.map(recipe => <button type="button" key={recipe.id} aria-pressed={creationTemplate === recipe.id} className={creationTemplate === recipe.id ? 'recipe selected' : 'recipe'} onClick={() => setCreationTemplate(recipe.id)}><strong>{recipe.title}</strong><span>{recipe.detail}</span></button>)}</div></fieldset>
             <label>Use it when <input value={skillActivation} onChange={event => setSkillActivation(event.target.value)} placeholder="for example: a user asks to review a pull request" /></label>
             <div className="form-row"><label>Response style<select value={skillTone} onChange={event => setSkillTone(event.target.value)}><option value="clear and practical">Clear and practical</option><option value="concise and direct">Concise and direct</option><option value="thorough and rigorous">Thorough and rigorous</option><option value="teaching-oriented">Teaching-oriented</option><option value="warm and collaborative">Warm and collaborative</option></select></label><label>Preferred deliverable<select value={skillOutputFormat} onChange={event => setSkillOutputFormat(event.target.value)}><option value="a concise answer with clear next steps">Concise answer + next steps</option><option value="a numbered step-by-step plan">Numbered step-by-step plan</option><option value="a prioritized checklist">Prioritized checklist</option><option value="a short executive brief">Short executive brief</option><option value="findings grouped by priority">Findings grouped by priority</option></select></label></div>
             <label>Personal rules <textarea value={skillInstructions} onChange={event => setSkillInstructions(event.target.value)} placeholder="What should it always do, avoid, or ask before proceeding?" rows={3} /></label>
@@ -498,23 +606,21 @@ function App() {
             <fieldset><legend>Preload skills</legend>{library?.skills.length ? <div className="skill-options">{library.skills.map(item => <label className="check-option" key={item.path}><input type="checkbox" checked={agentSkills.includes(item.name)} onChange={() => setAgentSkills(current => current.includes(item.name) ? current.filter(name => name !== item.name) : [...current, item.name])} /><span><strong>{item.name}</strong><small>{item.description}</small></span></label>)}</div> : <p className="field-help">Create skills first, then attach them to agents as capabilities.</p>}</fieldset>
           </>}
           {creationDialog !== 'folder' && <p className="field-help">Generates readable, editable Markdown. Nothing is executed and no provider is contacted.</p>}
-          <div className="modal-actions"><button type="button" onClick={() => setCreationDialog(null)}>Cancel</button><button className="primary" type="submit" disabled={!creationName.trim() || (creationDialog !== 'folder' && !creationDescription.trim()) || busy}>{busy ? 'Creating…' : `Create ${creationDialog === 'agent' ? 'Agent' : creationDialog === 'skill' ? 'Skill' : 'Folder'}`}</button></div>
+          {creationError && <p className="action-error" role="alert">{creationError}</p>}
+          <div className="modal-actions"><button type="button" disabled={busy} onClick={() => setCreationDialog(null)}>Cancel</button><button className="primary" type="submit" disabled={!creationName.trim() || (creationDialog !== 'folder' && !creationDescription.trim()) || busy}>{busy ? 'Creating…' : `Create ${creationDialog === 'agent' ? 'Agent' : creationDialog === 'skill' ? 'Skill' : 'Folder'}`}</button></div>
         </form>
       </div>}
 
-      {libraryPathDialog && <div className="modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setLibraryPathDialog(false) }}>
-        <form className="modal confirm-modal" role="dialog" aria-modal="true" aria-labelledby="library-path-title" onSubmit={loadLibraryPath}>
-          <div className="eyebrow">Local filesystem</div>
-          <h2 id="library-path-title">Open a skills library</h2>
-          <p>Enter an existing folder path. This folder remains the source of truth for your skills and agents.</p>
-          <input autoFocus value={libraryPath} onChange={event => setLibraryPath(event.target.value)} placeholder="F:\\AI Command Center\\My Skills" />
-          <div className="modal-actions"><button type="button" onClick={() => setLibraryPathDialog(false)}>Cancel</button><button className="primary" type="submit">Open library</button></div>
-        </form>
-      </div>}
+      {pathAction && <PathDialog action={pathAction} onClose={() => setPathAction(null)} />}
 
       {confirmation && <div className="modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setConfirmation(null) }}><section className="modal confirm-modal" role="alertdialog" aria-modal="true"><div className="eyebrow">Confirmation</div><h2>{confirmation.title}</h2><p>{confirmation.body}</p><div className="modal-actions"><button onClick={() => setConfirmation(null)}>Cancel</button><button className={confirmation.tone === 'danger' ? 'danger' : 'primary'} onClick={runConfirmation}>{confirmation.confirmLabel}</button></div></section></div>}
 
-      <footer><span className={busy ? 'pulse' : ''}>{busy ? 'Working…' : notice}</span><span>Local-first · Filesystem source of truth</span></footer>
+      {result && <div className="result-toast">
+        <div role="status"><strong>{result.message}</strong><span>{result.path}</span></div>
+        <button onClick={() => reveal(result.path)}>Show on disk</button>
+        <button className="icon-button" aria-label="Dismiss result" onClick={() => setResult(null)}>×</button>
+      </div>}
+      <footer><span role="status">{busy ? 'Working…' : notice}</span><span>Stored locally</span></footer>
     </main>
   )
 }

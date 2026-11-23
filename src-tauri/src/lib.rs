@@ -3,7 +3,6 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     fs,
-    io::{Read, Write},
     path::{Component, Path, PathBuf},
     time::UNIX_EPOCH,
 };
@@ -154,7 +153,7 @@ fn canonical_dir(path: &Path) -> Result<PathBuf, String> {
     if !path.is_dir() {
         return Err(format!("Folder is unavailable: {}", path.display()));
     }
-    path.canonicalize().map_err(err)
+    dunce::canonicalize(path).map_err(err)
 }
 fn safe_relative(value: &str) -> Result<PathBuf, String> {
     let path = Path::new(value);
@@ -169,7 +168,7 @@ fn safe_relative(value: &str) -> Result<PathBuf, String> {
 }
 fn within(root: &Path, candidate: &Path) -> Result<PathBuf, String> {
     let root = canonical_dir(root)?;
-    let candidate = candidate.canonicalize().map_err(err)?;
+    let candidate = dunce::canonicalize(candidate).map_err(err)?;
     if !candidate.starts_with(&root) {
         return Err("Path is outside the selected library".into());
     }
@@ -374,7 +373,7 @@ fn category_tree(root: &Path, skill_dirs: &[PathBuf]) -> Vec<Category> {
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if !path.is_dir()
+            if !entry.file_type().is_ok_and(|kind| kind.is_dir())
                 || entry.file_name().to_string_lossy().starts_with('.')
                 || skill_dirs.iter().any(|s| s == &path)
             {
@@ -405,7 +404,11 @@ fn scan_library(root: String) -> Result<Library, String> {
     for entry in WalkDir::new(&root)
         .follow_links(false)
         .into_iter()
-        .filter_entry(|entry| entry.path() == root || entry.path() != root.join("agents"))
+        .filter_entry(|entry| {
+            entry.depth() == 0
+                || (entry.path() != root.join("agents")
+                    && !entry.file_name().to_string_lossy().starts_with('.'))
+        })
         .filter_map(Result::ok)
     {
         if entry.file_type().is_file() && entry.file_name() == "SKILL.md" {
@@ -859,7 +862,7 @@ fn seed_starter_agents(root: String) -> Result<Vec<AgentSummary>, String> {
 fn authorized_agent_file(root: &Path, agent_path: &Path) -> Result<(PathBuf, PathBuf), String> {
     let root = canonical_dir(root)?;
     let agent_root = canonical_dir(&root.join("agents"))?;
-    let file = agent_path.canonicalize().map_err(err)?;
+    let file = dunce::canonicalize(agent_path).map_err(err)?;
     if !file.is_file() || !file.starts_with(&agent_root) {
         return Err("Agent path is outside the selected library".into());
     }
@@ -948,7 +951,18 @@ fn install_agent(
 }
 
 fn copy_dir(source: &Path, destination: &Path) -> Result<(), String> {
+    if destination.starts_with(source) {
+        return Err("Choose a destination outside the source skill folder".into());
+    }
     fs::create_dir(destination).map_err(err)?;
+    let result = copy_dir_contents(source, destination);
+    if result.is_err() {
+        let _ = fs::remove_dir_all(destination);
+    }
+    result
+}
+
+fn copy_dir_contents(source: &Path, destination: &Path) -> Result<(), String> {
     for entry in WalkDir::new(source)
         .follow_links(false)
         .min_depth(1)
@@ -964,8 +978,10 @@ fn copy_dir(source: &Path, destination: &Path) -> Result<(), String> {
         let target = destination.join(entry.path().strip_prefix(source).map_err(err)?);
         if entry.file_type().is_dir() {
             fs::create_dir_all(&target).map_err(err)?;
-        } else {
+        } else if entry.file_type().is_file() {
             fs::copy(entry.path(), target).map_err(err)?;
+        } else {
+            return Err(format!("Unsupported file: {}", entry.path().display()));
         }
     }
     Ok(())
@@ -973,13 +989,17 @@ fn copy_dir(source: &Path, destination: &Path) -> Result<(), String> {
 #[tauri::command]
 fn import_skill(root: String, category: String, source: String) -> Result<String, String> {
     let root = canonical_dir(Path::new(&root))?;
-    let category = safe_relative(&category)?;
+    let category = authorized_relative_dir(&root, &safe_relative(&category)?)?;
     let source = canonical_dir(Path::new(&source))?;
     if !source.join("SKILL.md").is_file() {
         return Err("The selected folder does not contain SKILL.md".into());
     }
+    let skill = inspect(&source, &source);
+    if skill.status != "valid" {
+        return Err(skill.errors.join("; "));
+    }
     let name = source.file_name().ok_or("Selected folder has no name")?;
-    let destination = root.join(category).join(name);
+    let destination = category.join(name);
     if destination.exists() {
         return Err("The import destination already exists".into());
     }
@@ -991,18 +1011,35 @@ fn import_skill(root: String, category: String, source: String) -> Result<String
 fn export_skill_zip(
     root: String,
     skill_path: String,
-    destination: String,
+    destination_folder: String,
 ) -> Result<String, String> {
     let root = canonical_dir(Path::new(&root))?;
     let dir = within(&root, Path::new(&skill_path))?;
     if inspect(&root, &dir).status != "valid" {
         return Err("Fix validation errors before exporting".into());
     }
-    let output = fs::File::create(&destination).map_err(err)?;
+    let directory = canonical_dir(Path::new(&destination_folder))?;
+    if directory.starts_with(&dir) {
+        return Err("Choose an export folder outside the skill package".into());
+    }
+    let name = dir.file_name().ok_or("Skill folder has no name")?;
+    let mut filename = name.to_os_string();
+    filename.push(".zip");
+    let destination = directory.join(filename);
+    let output = fs::File::create_new(&destination)
+        .map_err(|error| format!("Could not create {}: {error}", destination.display()))?;
+    if let Err(error) = write_skill_zip(&dir, output) {
+        let _ = fs::remove_file(&destination);
+        return Err(error);
+    }
+    Ok(destination.to_string_lossy().into_owned())
+}
+
+fn write_skill_zip(dir: &Path, output: fs::File) -> Result<(), String> {
     let mut zip = zip::ZipWriter::new(output);
     let options = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
-    for entry in WalkDir::new(&dir)
+    for entry in WalkDir::new(dir)
         .follow_links(false)
         .min_depth(1)
         .into_iter()
@@ -1016,23 +1053,23 @@ fn export_skill_zip(
         }
         let relative = entry
             .path()
-            .strip_prefix(&dir)
+            .strip_prefix(dir)
             .map_err(err)?
             .to_string_lossy()
             .replace('\\', "/");
         if entry.file_type().is_dir() {
             zip.add_directory(format!("{relative}/"), options)
                 .map_err(err)?;
-        } else {
+        } else if entry.file_type().is_file() {
             zip.start_file(relative, options).map_err(err)?;
             let mut file = fs::File::open(entry.path()).map_err(err)?;
-            let mut data = vec![];
-            file.read_to_end(&mut data).map_err(err)?;
-            zip.write_all(&data).map_err(err)?;
+            std::io::copy(&mut file, &mut zip).map_err(err)?;
+        } else {
+            return Err(format!("Unsupported file: {}", entry.path().display()));
         }
     }
     zip.finish().map_err(err)?;
-    Ok(destination)
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -1061,7 +1098,10 @@ fn install_skill(
     };
     fs::create_dir_all(&base).map_err(err)?;
     let folder = skill.file_name().ok_or("Skill folder has no name")?;
-    let destination = base.join(folder);
+    let destination = canonical_dir(&base)?.join(folder);
+    if destination.starts_with(&skill) {
+        return Err("Choose an installation folder outside the source skill".into());
+    }
     if destination.exists() || destination.symlink_metadata().is_ok() {
         return Err(format!(
             "Installation target already exists: {}",
@@ -1103,20 +1143,24 @@ fn install_skill(
     };
     fs::create_dir_all(&base).map_err(err)?;
     let folder = skill.file_name().ok_or("Skill folder has no name")?;
-    let destination = base.join(folder);
+    let destination = canonical_dir(&base)?.join(folder);
+    if destination.starts_with(&skill) {
+        return Err("Choose an installation folder outside the source skill".into());
+    }
     if destination.exists() || destination.symlink_metadata().is_ok() {
         return Err(format!(
             "Installation target already exists: {}",
             destination.display()
         ));
     }
-    symlink_dir(&skill, &destination).map_err(|error| {
-        format!(
-            "Could not create the Windows skill link: {error}. Enable Windows Developer Mode or run Command Center with permission to create symbolic links."
-        )
-    })?;
-    let target = fs::read_link(&destination).map_err(err)?;
-    if target != skill {
+    if let Err(error) = symlink_dir(&skill, &destination) {
+        if matches!(error.raw_os_error(), Some(5 | 50 | 1314)) {
+            copy_dir(&skill, &destination)?;
+            return Ok(destination.to_string_lossy().into());
+        }
+        return Err(format!("Could not install the skill: {error}"));
+    }
+    if !dunce::canonicalize(&destination).is_ok_and(|target| target == skill) {
         let _ = fs::remove_dir(&destination);
         return Err("Could not verify installed Windows skill link".into());
     }
@@ -1192,6 +1236,55 @@ mod tests {
     fn validates_frontmatter() {
         assert!(split_frontmatter("---\nname: demo\ndescription: useful\n---\nBody").is_ok());
         assert!(split_frontmatter("No frontmatter").is_err());
+    }
+    #[test]
+    fn skill_can_be_imported_exported_and_installed() {
+        let scratch = std::env::temp_dir().join(format!(
+            "command-center-workflow-{}-{}",
+            std::process::id(),
+            UNIX_EPOCH.elapsed().unwrap().as_nanos()
+        ));
+        fs::create_dir(&scratch).unwrap();
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(scratch.clone());
+        let library = scratch.join("Library");
+        let project = scratch.join("Project with spaces");
+        let source = scratch.join("review-skill");
+        for folder in [&library, &project, &source] {
+            fs::create_dir(folder).unwrap();
+        }
+        let text_path = |path: &Path| path.to_string_lossy().into_owned();
+        let contents =
+            "---\nname: review-skill\ndescription: Reviews a draft.\n---\nReview the draft.";
+        fs::write(source.join("SKILL.md"), contents).unwrap();
+        fs::write(source.join("notes.md"), "Supporting notes").unwrap();
+        let root = text_path(&library);
+        let imported = import_skill(root.clone(), String::new(), text_path(&source)).unwrap();
+        assert!(export_skill_zip(root.clone(), imported.clone(), imported.clone()).is_err());
+        let archive =
+            export_skill_zip(root.clone(), imported.clone(), text_path(&project)).unwrap();
+        {
+            let mut zip = zip::ZipArchive::new(fs::File::open(&archive).unwrap()).unwrap();
+            assert!(zip.by_name("SKILL.md").is_ok());
+            assert!(zip.by_name("notes.md").is_ok());
+        }
+        assert!(export_skill_zip(root.clone(), imported.clone(), text_path(&project)).is_err());
+        let installed =
+            install_skill(root, imported, "project".into(), Some(text_path(&project))).unwrap();
+        assert_eq!(
+            fs::read_to_string(Path::new(&installed).join("SKILL.md")).unwrap(),
+            contents
+        );
+        assert!(
+            project
+                .join(".claude/skills/review-skill/notes.md")
+                .is_file()
+        );
     }
     #[test]
     fn protects_reserved_slugs() {

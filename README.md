@@ -34,7 +34,7 @@ Install Git, Node.js LTS, Rust with the MSVC toolchain, Microsoft C++ Build Tool
 - Search, inspect, edit, explicitly save, and validate canonical Markdown source.
 - Run provider-free quality checks for activation conditions, process, constraints, output contracts, placeholders, and Claude compatibility.
 - Detect save conflicts using content fingerprints.
-- Export portable ZIPs and install verified Claude Code symlinks to personal or project skill locations.
+- Export a portable ZIP to a selected folder. Install skills in personal or project Claude Code locations. If Windows denies link creation, the app installs a copy.
 - Install agents as verified Markdown copies to personal or project Claude Code locations.
 
 Local Claude Code installation does not imply that a running session has loaded a capability. ZIP export requires manual upload for account-level Claude access. See [Capability Studio architecture](docs/CAPABILITY_STUDIO.md) for the product model and future extension seams.
