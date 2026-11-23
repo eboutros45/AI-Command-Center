@@ -16,6 +16,8 @@ type ProposalRun = {
   drafter: string
   reviewer: string
   reviseOnFeedback?: boolean
+  retrieveSources?: boolean
+  reviewDraft?: boolean
   sources: { excerpts: Excerpt[]; filesSearched: number; skippedFiles: number; limited: boolean } | null
   steps: Step[]
   proposal: string | null
@@ -30,6 +32,8 @@ type Setup = {
   provider: Provider
   model: string
   reviseOnFeedback: boolean
+  retrieveSources: boolean
+  reviewDraft: boolean
 }
 type Recipe = { id: string; name: string; setup: Setup }
 
@@ -41,22 +45,26 @@ const stages: { id: Stage; label: string; detail: string }[] = [
 ]
 const providerNames = { ollama: 'Ollama', openai: 'OpenAI' }
 
-function WorkflowRoute({ visibleSteps, revise }: {
+function WorkflowRoute({ visibleSteps, revise, retrieve, review }: {
   visibleSteps: Partial<Record<Stage, Step>>
   revise: boolean
+  retrieve: boolean
+  review: boolean
 }) {
   const failed = Object.values(visibleSteps).some(step => step?.status === 'failed')
   const verdict = visibleSteps.review?.status === 'complete' ? visibleSteps.review.output.trim().split(/\r?\n/, 1)[0].trim() : null
   const branches = [
-    { label: 'Review passes', action: 'Return draft', active: !failed && verdict === 'PASS' },
-    { label: 'Review requests changes', action: revise ? 'Revise once, then return draft' : 'Return draft with findings', active: !failed && verdict === 'REVISE' },
+    ...(review ? [
+      { label: 'Review passes', action: 'Return draft', active: !failed && verdict === 'PASS' },
+      { label: 'Review requests changes', action: revise ? 'Revise once, then return draft' : 'Return draft with findings', active: !failed && verdict === 'REVISE' },
+    ] : [{ label: 'Draft completes', action: 'Return draft', active: !failed && visibleSteps.draft?.status === 'complete' }]),
     { label: 'A step fails', action: 'Stop and keep step outputs', active: failed },
   ]
   return (
     <section className="knowledge-card" aria-label="Workflow route">
       <h3>Workflow route</h3>
       <div className="workflow-route">
-        {stages.slice(0, 3).map((stage, index) => <div key={stage.id}>
+        {stages.slice(0, 3).filter(stage => (stage.id !== 'retrieve' || retrieve) && (stage.id !== 'review' || review)).map((stage, index) => <div key={stage.id}>
           {index > 0 && <span aria-hidden="true">→</span>}
           <a href={`#proposal-step-${stage.id}`} data-status={visibleSteps[stage.id]?.status}>{stage.label}</a>
         </div>)}
@@ -82,6 +90,8 @@ export default function Workflows({ libraryRoot, skills, agents, openLibrary }: 
   const [reviewer, setReviewer] = useState('')
   const [provider, setProvider] = useState<Provider>('ollama')
   const [reviseOnFeedback, setReviseOnFeedback] = useState(true)
+  const [retrieveSources, setRetrieveSources] = useState(true)
+  const [reviewDraft, setReviewDraft] = useState(true)
   const [models, setModels] = useState(() => ({
     ollama: localStorage.getItem('knowledgeModel') ?? '',
     openai: localStorage.getItem('testOpenAiModel') ?? 'gpt-4.1-mini',
@@ -118,13 +128,15 @@ export default function Workflows({ libraryRoot, skills, agents, openLibrary }: 
   const draftingSkills = skills.filter(skill => skill.status === 'valid')
   const reviewAgents = agents.filter(agent => agent.status === 'valid')
   const setup: Setup = {
-    knowledgeFolder: folder.trim().replace(/^"(.+)"$/, '$1'),
-    query: query.trim(), drafterPath: drafter, reviewerPath: reviewer, provider, model: models[provider].trim(),
-    reviseOnFeedback,
+    knowledgeFolder: retrieveSources ? folder.trim().replace(/^"(.+)"$/, '$1') : '',
+    query: retrieveSources ? query.trim() : '',
+    drafterPath: drafter, reviewerPath: reviewDraft ? reviewer : '', provider, model: models[provider].trim(),
+    retrieveSources, reviewDraft, reviseOnFeedback: reviewDraft && reviseOnFeedback,
   }
   const missingDraft = Boolean(drafter) && !draftingSkills.some(skill => skill.path === drafter)
-  const missingReview = Boolean(reviewer) && !reviewAgents.some(agent => agent.path === reviewer)
-  const configured = setup.knowledgeFolder && setup.query && setup.model && drafter && reviewer && !missingDraft && !missingReview
+  const missingReview = reviewDraft && Boolean(reviewer) && !reviewAgents.some(agent => agent.path === reviewer)
+  const configured = (!retrieveSources || Boolean(setup.knowledgeFolder && setup.query))
+    && Boolean(setup.model && drafter) && (!reviewDraft || Boolean(reviewer)) && !missingDraft && !missingReview
   const ready = configured && brief.trim()
 
   const loadRecipe = (id: string) => {
@@ -141,6 +153,8 @@ export default function Workflows({ libraryRoot, skills, agents, openLibrary }: 
     setProvider(recipe.setup.provider)
     setModels(previous => ({ ...previous, [recipe.setup.provider]: recipe.setup.model }))
     setReviseOnFeedback(recipe.setup.reviseOnFeedback)
+    setRetrieveSources(recipe.setup.retrieveSources ?? true)
+    setReviewDraft(recipe.setup.reviewDraft ?? true)
     setResult(null)
     setSteps({})
     setError('')
@@ -193,6 +207,14 @@ export default function Workflows({ libraryRoot, skills, agents, openLibrary }: 
   const visibleSteps = result ? Object.fromEntries(result.steps.map(step => [step.stage, step])) : steps
   const wasRevised = visibleSteps.revise?.status === 'complete'
   const revisionEnabled = result ? result.reviseOnFeedback ?? true : reviseOnFeedback
+  const routeRetrieve = result ? result.retrieveSources ?? true : retrieveSources
+  const routeReview = result ? result.reviewDraft ?? true : reviewDraft
+  const planSteps = [
+    retrieveSources ? 'Retrieve' : 'Use brief',
+    'Draft',
+    ...(reviewDraft ? ['Review', ...(reviseOnFeedback ? ['Revise if needed'] : [])] : []),
+    'Return draft',
+  ]
 
   return (
     <section className="knowledge-workspace">
@@ -200,7 +222,7 @@ export default function Workflows({ libraryRoot, skills, agents, openLibrary }: 
       <div className="knowledge-content">
         <div className="knowledge-heading">
           <h2>Proposal workflow</h2>
-          <p>Give a drafting skill and a review agent the same brief and the same sources.</p>
+          <p>Choose which steps run, then save the setup as a recipe.</p>
         </div>
         {!libraryRoot ? <div className="knowledge-card"><button className="primary" onClick={openLibrary}>Choose a library</button></div> : <>
           <section className="knowledge-card" aria-label="Workflow recipes">
@@ -223,32 +245,41 @@ export default function Workflows({ libraryRoot, skills, agents, openLibrary }: 
           <form className="knowledge-card" onSubmit={submit}>
             <fieldset className="workflow-inputs" disabled={pending || recipeSaving}>
               <label>Proposal brief<textarea required rows={4} maxLength={4000} value={brief} onChange={event => setBrief(event.target.value)} placeholder="Who is this for, what do they need, and what should the proposal cover?" /></label>
+              <fieldset className="workflow-options">
+                <legend>Steps for the next run</legend>
+                <label className="workflow-checkbox"><input type="checkbox" checked={retrieveSources} onChange={event => setRetrieveSources(event.target.checked)} /> Retrieve from a document folder</label>
+                <label className="workflow-checkbox"><input type="checkbox" checked={reviewDraft} onChange={event => setReviewDraft(event.target.checked)} /> Review the draft with an agent</label>
+                {reviewDraft && <label className="workflow-checkbox"><input type="checkbox" checked={reviseOnFeedback} onChange={event => setReviseOnFeedback(event.target.checked)} /> Revise once when the reviewer requests changes</label>}
+                <p className="workflow-plan" role="status">{planSteps.join(' → ')}</p>
+              </fieldset>
               <div className="workflow-grid">
-                <label>Document folder<input required value={folder} onChange={event => setFolder(event.target.value)} /></label>
-                <label>Source search terms<input required maxLength={1000} value={query} onChange={event => setQuery(event.target.value)} placeholder="pricing onboarding scope" /></label>
+                {retrieveSources && <>
+                  <label>Document folder<input required value={folder} onChange={event => setFolder(event.target.value)} /></label>
+                  <label>Source search terms<input required maxLength={1000} value={query} onChange={event => setQuery(event.target.value)} placeholder="pricing onboarding scope" /></label>
+                </>}
                 <label>Drafting skill<select value={drafter} onChange={event => setDrafter(event.target.value)} required>
                   <option value="">Choose a skill</option>
                   {draftingSkills.map(skill => <option key={skill.path} value={skill.path}>{skill.name} · {skill.relativePath || 'Library root'}</option>)}
                 </select></label>
-                <label>Review agent<select value={reviewer} onChange={event => setReviewer(event.target.value)} required>
+                {reviewDraft && <label>Review agent<select value={reviewer} onChange={event => setReviewer(event.target.value)} required>
                   <option value="">Choose an agent</option>
                   {reviewAgents.map(agent => <option key={agent.path} value={agent.path}>{agent.name} · {agent.relativePath}</option>)}
-                </select></label>
+                </select></label>}
                 <label>Provider<select value={provider} onChange={event => setProvider(event.target.value as Provider)}>
                   <option value="ollama">Ollama (local)</option>
                   <option value="openai">OpenAI (hosted)</option>
                 </select></label>
                 <label>{provider === 'ollama' ? 'Installed Ollama model' : 'OpenAI model ID'}<input required maxLength={150} placeholder={provider === 'ollama' ? 'gemma3:4b' : 'gpt-4.1-mini'} value={models[provider]} onChange={event => setModels({ ...models, [provider]: event.target.value })} /></label>
               </div>
-              <label className="workflow-checkbox"><input type="checkbox" checked={reviseOnFeedback} onChange={event => setReviseOnFeedback(event.target.checked)} /> Revise once when the reviewer requests changes</label>
             </fieldset>
-            {(!draftingSkills.length || !reviewAgents.length) && <p>Create or import a valid skill and agent to assign both roles.</p>}
+            {!draftingSkills.length && <p>Create or import a valid drafting skill to run a workflow.</p>}
+            {reviewDraft && !reviewAgents.length && <p>Create a valid review agent, or turn off review for this run.</p>}
             {(missingDraft || missingReview) && <p className="action-error">A saved role is missing or invalid. Select a replacement before running.</p>}
-            {provider === 'openai' && <p className="provider-notice">This sends the brief, retrieved excerpts, saved role instructions, and intermediate text to OpenAI. The workflow makes up to {reviseOnFeedback ? 'three' : 'two'} model calls. API charges may apply.</p>}
+            {provider === 'openai' && <p className="provider-notice">This sends the brief and saved role instructions{retrieveSources ? ', plus retrieved excerpts' : ''}{reviewDraft ? ' and intermediate text' : ''} to OpenAI. The workflow makes {reviewDraft ? reviseOnFeedback ? 'up to three model calls' : 'two model calls' : 'one model call'}. API charges may apply.</p>}
             <button className="primary" disabled={!ready || pending || historyLoading || recipeSaving}>{pending ? 'Running workflow…' : provider === 'openai' ? 'Run workflow with OpenAI' : 'Run workflow'}</button>
             {error && <p className="action-error" role="alert">{error}</p>}
           </form>
-          <WorkflowRoute visibleSteps={visibleSteps} revise={revisionEnabled} />
+          <WorkflowRoute visibleSteps={visibleSteps} revise={revisionEnabled} retrieve={routeRetrieve} review={routeReview} />
           <section className="knowledge-card" aria-label="Workflow steps">
             <h3>Steps</h3>
             <ol className="workflow-steps">{stages.map(stage => {
@@ -257,7 +288,9 @@ export default function Workflows({ libraryRoot, skills, agents, openLibrary }: 
                 <div className="workflow-step-head"><strong>{stage.label}</strong>
                   <span className={`workflow-state ${step?.status ?? 'waiting'}`} role="status">{step?.status ?? 'waiting'}</span>
                 </div>
-                <p>{stage.id === 'revise' && !revisionEnabled ? 'Return the original draft and review findings.' : stage.detail}</p>
+                <p>{stage.id === 'retrieve' && !routeRetrieve ? 'Use the brief as context.'
+                  : (stage.id === 'review' || stage.id === 'revise') && !routeReview ? 'Review is off for this route.'
+                    : stage.id === 'revise' && !revisionEnabled ? 'Return the original draft and review findings.' : stage.detail}</p>
                 {step?.error && <p className="action-error" role="alert">{step.error}</p>}
                 {step?.output && <details open={stage.id === 'retrieve'}><summary>{stage.id === 'retrieve' ? step.output : 'View step output'}</summary>
                   {stage.id === 'retrieve' && result?.sources ? <>
@@ -277,9 +310,9 @@ export default function Workflows({ libraryRoot, skills, agents, openLibrary }: 
             {result.proposal && <div>{result.proposal}</div>}
             {wasRevised && <p>One revision completed. Check the review findings and any open issues before sharing.</p>}
             {!result.proposal && <p>The steps above show where the run stopped and any output it produced.</p>}
-            <details><summary>Brief and source query</summary><pre>{result.brief}{'\n\n'}Search terms: {result.query}</pre></details>
+            <details><summary>{routeRetrieve ? 'Brief and source query' : 'Brief'}</summary><pre>{result.brief}{routeRetrieve && `\n\nSearch terms: ${result.query}`}</pre></details>
             <details><summary>Drafting skill snapshot</summary><pre>{result.drafter}</pre></details>
-            <details><summary>Review agent and skill snapshots</summary><pre>{result.reviewer}</pre></details>
+            {routeReview && <details><summary>Review agent and skill snapshots</summary><pre>{result.reviewer}</pre></details>}
           </section>}
           <section className="knowledge-card" aria-label="Recent workflows">
             <h3>Recent runs</h3>

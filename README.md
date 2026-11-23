@@ -69,3 +69,5 @@ The app sends test inputs and saved instructions to OpenAI when you select **Run
 Open **Workflows**, enter a proposal brief and a document folder, then provide source search terms. Assign a saved drafting skill and review agent from your library, choose a model, and run the template. It retrieves excerpts, drafts a proposal, requests a review, and optionally revises once. Expand each step to inspect its output and the retrieved citations. Recent runs include stopped runs and are saved with the brief, source excerpts, and role snapshots on this device.
 
 Save the setup as a named **Recipe** to reuse it with a fresh brief. Recipes belong to the selected library. The workflow route shows whether the review passed, requested changes, or stopped.
+
+Use **Steps for the next run** to turn document retrieval or agent review on or off. A brief-only draft needs just a drafting skill and a model. With review enabled, you can also choose whether review feedback triggers one revision. These choices are saved with the recipe and the run.
