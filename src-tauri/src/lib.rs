@@ -1159,6 +1159,8 @@ pub fn run() {
             skill_runs::list_runs,
             workflows::run_proposal,
             workflows::list_proposals,
+            workflows::list_proposal_recipes,
+            workflows::save_proposal_recipe,
             scan_library,
             read_skill,
             save_skill,

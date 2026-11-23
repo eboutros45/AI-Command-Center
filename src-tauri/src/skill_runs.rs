@@ -81,7 +81,7 @@ pub(crate) fn history_directory(
 pub(crate) fn save_run(directory: &Path, id: &str, run: &impl Serialize) -> Result<(), String> {
     let bytes = serde_json::to_vec(run).map_err(super::err)?;
     fs::create_dir_all(directory).map_err(super::err)?;
-    let temporary = directory.join(format!("{id}.tmp"));
+    let temporary = directory.join(format!("{}.tmp", run_identity()?.0));
     let result = {
         let mut file = fs::File::create_new(&temporary).map_err(super::err)?;
         file.write_all(&bytes).and_then(|()| file.sync_all())
@@ -95,6 +95,13 @@ pub(crate) fn save_run(directory: &Path, id: &str, run: &impl Serialize) -> Resu
 
 pub(crate) fn recent_runs<T: serde::de::DeserializeOwned>(
     directory: &Path,
+) -> Result<Vec<T>, String> {
+    stored_runs(directory, RECENT_RUNS)
+}
+
+pub(crate) fn stored_runs<T: serde::de::DeserializeOwned>(
+    directory: &Path,
+    limit: usize,
 ) -> Result<Vec<T>, String> {
     let entries = match fs::read_dir(directory) {
         Ok(entries) => entries,
@@ -114,7 +121,7 @@ pub(crate) fn recent_runs<T: serde::de::DeserializeOwned>(
     files.sort_unstable_by(|a, b| b.cmp(a));
     files
         .into_iter()
-        .take(RECENT_RUNS)
+        .take(limit)
         .map(|path| {
             let file = fs::File::open(path).map_err(super::err)?;
             serde_json::from_reader(file).map_err(super::err)

@@ -38,6 +38,19 @@
 .workflow-steps { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .workflow-steps > li { border-left: 2px solid var(--line-strong); padding: 6px 12px; }
 .workflow-step-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.workflow-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.knowledge-card .workflow-checkbox { display: flex; align-items: center; gap: 8px; }
+.knowledge-card .workflow-checkbox input { width: auto; accent-color: var(--green); }
+.workflow-route { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.workflow-route > div { display: flex; align-items: center; gap: 10px; }
+.workflow-route a { padding: 6px 8px; border-radius: 6px; background: var(--paper); color: var(--ink); font-size: 12px; }
+.workflow-route a[data-status='complete'], .workflow-route a[data-status='running'] { background: var(--green-soft); color: var(--green); }
+.workflow-route a[data-status='failed'] { background: var(--red-soft); color: var(--red); }
+.workflow-branches { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
+.workflow-branches li { display: grid; align-content: start; gap: 5px; padding: 8px; border: 1px solid var(--line); border-radius: 7px; font-size: 12px; overflow-wrap: anywhere; }
+.workflow-branches li.taken { border-color: var(--green); background: var(--green-soft); }
+.workflow-branches span { color: var(--muted); }
+.workflow-branches small { color: var(--green); }
 .workflow-state { border-radius: 999px; padding: 3px 8px; font-size: 11px; text-transform: capitalize; background: var(--paper); color: var(--muted); }
 .workflow-state.complete, .workflow-state.running { color: var(--green); background: var(--green-soft); }
 .workflow-state.failed { color: var(--red); background: var(--red-soft); }

@@ -15,12 +15,23 @@ type ProposalRun = {
   query: string
   drafter: string
   reviewer: string
+  reviseOnFeedback?: boolean
   sources: { excerpts: Excerpt[]; filesSearched: number; skippedFiles: number; limited: boolean } | null
   steps: Step[]
   proposal: string | null
 }
 type Asset = { name: string; path: string; relativePath: string; status: string }
 type ProposalResult = { run: ProposalRun; saveError: string | null }
+type Setup = {
+  knowledgeFolder: string
+  query: string
+  drafterPath: string
+  reviewerPath: string
+  provider: Provider
+  model: string
+  reviseOnFeedback: boolean
+}
+type Recipe = { id: string; name: string; setup: Setup }
 
 const stages: { id: Stage; label: string; detail: string }[] = [
   { id: 'retrieve', label: 'Retrieve sources', detail: 'Find passages that support the brief.' },
@@ -29,6 +40,34 @@ const stages: { id: Stage; label: string; detail: string }[] = [
   { id: 'revise', label: 'Revise if needed', detail: 'Make one revision when the reviewer requests changes.' },
 ]
 const providerNames = { ollama: 'Ollama', openai: 'OpenAI' }
+
+function WorkflowRoute({ visibleSteps, revise }: {
+  visibleSteps: Partial<Record<Stage, Step>>
+  revise: boolean
+}) {
+  const failed = Object.values(visibleSteps).some(step => step?.status === 'failed')
+  const verdict = visibleSteps.review?.status === 'complete' ? visibleSteps.review.output.trim().split(/\r?\n/, 1)[0].trim() : null
+  const branches = [
+    { label: 'Review passes', action: 'Return draft', active: !failed && verdict === 'PASS' },
+    { label: 'Review requests changes', action: revise ? 'Revise once, then return draft' : 'Return draft with findings', active: !failed && verdict === 'REVISE' },
+    { label: 'A step fails', action: 'Stop and keep step outputs', active: failed },
+  ]
+  return (
+    <section className="knowledge-card" aria-label="Workflow route">
+      <h3>Workflow route</h3>
+      <div className="workflow-route">
+        {stages.slice(0, 3).map((stage, index) => <div key={stage.id}>
+          {index > 0 && <span aria-hidden="true">→</span>}
+          <a href={`#proposal-step-${stage.id}`} data-status={visibleSteps[stage.id]?.status}>{stage.label}</a>
+        </div>)}
+      </div>
+      <ul className="workflow-branches">{branches.map(branch => <li key={branch.label} className={branch.active ? 'taken' : ''}>
+        <strong>{branch.label}</strong><span>{branch.action}</span>
+        {branch.active && <small>Route taken</small>}
+      </li>)}</ul>
+    </section>
+  )
+}
 
 export default function Workflows({ libraryRoot, skills, agents, openLibrary }: {
   libraryRoot?: string
@@ -42,6 +81,7 @@ export default function Workflows({ libraryRoot, skills, agents, openLibrary }: 
   const [drafter, setDrafter] = useState('')
   const [reviewer, setReviewer] = useState('')
   const [provider, setProvider] = useState<Provider>('ollama')
+  const [reviseOnFeedback, setReviseOnFeedback] = useState(true)
   const [models, setModels] = useState(() => ({
     ollama: localStorage.getItem('knowledgeModel') ?? '',
     openai: localStorage.getItem('testOpenAiModel') ?? 'gpt-4.1-mini',
@@ -53,6 +93,13 @@ export default function Workflows({ libraryRoot, skills, agents, openLibrary }: 
   const [historyError, setHistoryError] = useState('')
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
+  const [recipes, setRecipes] = useState<Recipe[]>([])
+  const [recipeId, setRecipeId] = useState('')
+  const [recipeName, setRecipeName] = useState('')
+  const [recipeLoading, setRecipeLoading] = useState(Boolean(libraryRoot))
+  const [recipeSaving, setRecipeSaving] = useState(false)
+  const [recipeError, setRecipeError] = useState('')
+  const [recipeNotice, setRecipeNotice] = useState('')
 
   useEffect(() => {
     if (!libraryRoot) return
@@ -61,17 +108,66 @@ export default function Workflows({ libraryRoot, skills, agents, openLibrary }: 
       .then(history => { if (active) setRuns(history) })
       .catch(failure => { if (active) setHistoryError(String(failure)) })
       .finally(() => { if (active) setHistoryLoading(false) })
+    invoke<Recipe[]>('list_proposal_recipes', { libraryRoot })
+      .then(saved => { if (active) setRecipes(saved) })
+      .catch(failure => { if (active) setRecipeError(String(failure)) })
+      .finally(() => { if (active) setRecipeLoading(false) })
     return () => { active = false }
   }, [libraryRoot])
 
   const draftingSkills = skills.filter(skill => skill.status === 'valid')
   const reviewAgents = agents.filter(agent => agent.status === 'valid')
-  const ready = folder.trim() && query.trim() && brief.trim() && models[provider].trim()
-    && draftingSkills.some(skill => skill.path === drafter) && reviewAgents.some(agent => agent.path === reviewer)
+  const setup: Setup = {
+    knowledgeFolder: folder.trim().replace(/^"(.+)"$/, '$1'),
+    query: query.trim(), drafterPath: drafter, reviewerPath: reviewer, provider, model: models[provider].trim(),
+    reviseOnFeedback,
+  }
+  const missingDraft = Boolean(drafter) && !draftingSkills.some(skill => skill.path === drafter)
+  const missingReview = Boolean(reviewer) && !reviewAgents.some(agent => agent.path === reviewer)
+  const configured = setup.knowledgeFolder && setup.query && setup.model && drafter && reviewer && !missingDraft && !missingReview
+  const ready = configured && brief.trim()
+
+  const loadRecipe = (id: string) => {
+    const recipe = recipes.find(item => item.id === id)
+    setRecipeId(id)
+    setRecipeName(recipe?.name ?? '')
+    setRecipeError('')
+    setRecipeNotice('')
+    if (!recipe) return
+    setFolder(recipe.setup.knowledgeFolder)
+    setQuery(recipe.setup.query)
+    setDrafter(recipe.setup.drafterPath)
+    setReviewer(recipe.setup.reviewerPath)
+    setProvider(recipe.setup.provider)
+    setModels(previous => ({ ...previous, [recipe.setup.provider]: recipe.setup.model }))
+    setReviseOnFeedback(recipe.setup.reviseOnFeedback)
+    setResult(null)
+    setSteps({})
+    setError('')
+    setRecipeNotice(`Loaded “${recipe.name}”.`)
+  }
+
+  const saveRecipe = async (id: string | null) => {
+    if (!libraryRoot || !configured || !recipeName.trim() || pending || recipeSaving || recipeLoading) return
+    setRecipeSaving(true)
+    setRecipeError('')
+    setRecipeNotice('')
+    try {
+      const recipe = await invoke<Recipe>('save_proposal_recipe', { libraryRoot, recipeId: id, name: recipeName.trim(), setup })
+      setRecipes(saved => [recipe, ...saved.filter(item => item.id !== recipe.id)])
+      setRecipeId(recipe.id)
+      setRecipeName(recipe.name)
+      setRecipeNotice(`Saved “${recipe.name}”.`)
+    } catch (failure) {
+      setRecipeError(String(failure))
+    } finally {
+      setRecipeSaving(false)
+    }
+  }
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
-    if (!libraryRoot || !ready || historyLoading || pending) return
+    if (!libraryRoot || !ready || historyLoading || pending || recipeSaving) return
     setPending(true)
     setSteps({})
     setResult(null)
@@ -81,8 +177,7 @@ export default function Workflows({ libraryRoot, skills, agents, openLibrary }: 
       const { run, saveError } = await invoke<ProposalResult>('run_proposal', {
         events,
         request: {
-          libraryRoot, knowledgeFolder: folder.trim().replace(/^"(.+)"$/, '$1'), query: query.trim(),
-          brief: brief.trim(), drafterPath: drafter, reviewerPath: reviewer, provider, model: models[provider].trim(),
+          libraryRoot, brief: brief.trim(), ...setup,
         },
       })
       setResult(run)
@@ -97,6 +192,7 @@ export default function Workflows({ libraryRoot, skills, agents, openLibrary }: 
 
   const visibleSteps = result ? Object.fromEntries(result.steps.map(step => [step.stage, step])) : steps
   const wasRevised = visibleSteps.revise?.status === 'complete'
+  const revisionEnabled = result ? result.reviseOnFeedback ?? true : reviseOnFeedback
 
   return (
     <section className="knowledge-workspace">
@@ -107,8 +203,25 @@ export default function Workflows({ libraryRoot, skills, agents, openLibrary }: 
           <p>Give a drafting skill and a review agent the same brief and the same sources.</p>
         </div>
         {!libraryRoot ? <div className="knowledge-card"><button className="primary" onClick={openLibrary}>Choose a library</button></div> : <>
+          <section className="knowledge-card" aria-label="Workflow recipes">
+            <h3>Recipes</h3>
+            <div className="workflow-grid">
+              <label>Saved recipe<select value={recipeId} disabled={pending || recipeLoading || recipeSaving} onChange={event => loadRecipe(event.target.value)}>
+                <option value="">{recipeLoading ? 'Loading recipes…' : 'New recipe'}</option>
+                {recipes.map(recipe => <option key={recipe.id} value={recipe.id}>{recipe.name}</option>)}
+              </select></label>
+              <label>Recipe name<input maxLength={80} value={recipeName} disabled={pending || recipeSaving} onChange={event => setRecipeName(event.target.value)} placeholder="Client onboarding" /></label>
+            </div>
+            <p>The recipe saves the roles, document folder, search terms, model, and revision setting. Enter a fresh brief for each run.</p>
+            <div className="workflow-actions">
+              {recipeId && <button type="button" disabled={!configured || !recipeName.trim() || pending || recipeSaving || recipeLoading} onClick={() => saveRecipe(recipeId)}>Update recipe</button>}
+              <button type="button" disabled={!configured || !recipeName.trim() || pending || recipeSaving || recipeLoading} onClick={() => saveRecipe(null)}>{recipeId ? 'Save as new recipe' : 'Save recipe'}</button>
+            </div>
+            {recipeNotice && <p role="status">{recipeNotice}</p>}
+            {recipeError && <p className="action-error" role="alert">{recipeError}</p>}
+          </section>
           <form className="knowledge-card" onSubmit={submit}>
-            <fieldset className="workflow-inputs" disabled={pending}>
+            <fieldset className="workflow-inputs" disabled={pending || recipeSaving}>
               <label>Proposal brief<textarea required rows={4} maxLength={4000} value={brief} onChange={event => setBrief(event.target.value)} placeholder="Who is this for, what do they need, and what should the proposal cover?" /></label>
               <div className="workflow-grid">
                 <label>Document folder<input required value={folder} onChange={event => setFolder(event.target.value)} /></label>
@@ -127,21 +240,24 @@ export default function Workflows({ libraryRoot, skills, agents, openLibrary }: 
                 </select></label>
                 <label>{provider === 'ollama' ? 'Installed Ollama model' : 'OpenAI model ID'}<input required maxLength={150} placeholder={provider === 'ollama' ? 'gemma3:4b' : 'gpt-4.1-mini'} value={models[provider]} onChange={event => setModels({ ...models, [provider]: event.target.value })} /></label>
               </div>
+              <label className="workflow-checkbox"><input type="checkbox" checked={reviseOnFeedback} onChange={event => setReviseOnFeedback(event.target.checked)} /> Revise once when the reviewer requests changes</label>
             </fieldset>
             {(!draftingSkills.length || !reviewAgents.length) && <p>Create or import a valid skill and agent to assign both roles.</p>}
-            {provider === 'openai' && <p className="provider-notice">This sends the brief, retrieved excerpts, saved role instructions, and intermediate text to OpenAI. The workflow makes up to three model calls. API charges may apply.</p>}
-            <button className="primary" disabled={!ready || pending || historyLoading}>{pending ? 'Running workflow…' : provider === 'openai' ? 'Run workflow with OpenAI' : 'Run workflow'}</button>
+            {(missingDraft || missingReview) && <p className="action-error">A saved role is missing or invalid. Select a replacement before running.</p>}
+            {provider === 'openai' && <p className="provider-notice">This sends the brief, retrieved excerpts, saved role instructions, and intermediate text to OpenAI. The workflow makes up to {reviseOnFeedback ? 'three' : 'two'} model calls. API charges may apply.</p>}
+            <button className="primary" disabled={!ready || pending || historyLoading || recipeSaving}>{pending ? 'Running workflow…' : provider === 'openai' ? 'Run workflow with OpenAI' : 'Run workflow'}</button>
             {error && <p className="action-error" role="alert">{error}</p>}
           </form>
+          <WorkflowRoute visibleSteps={visibleSteps} revise={revisionEnabled} />
           <section className="knowledge-card" aria-label="Workflow steps">
             <h3>Steps</h3>
             <ol className="workflow-steps">{stages.map(stage => {
               const step = visibleSteps[stage.id]
-              return <li key={stage.id}>
+              return <li key={stage.id} id={`proposal-step-${stage.id}`}>
                 <div className="workflow-step-head"><strong>{stage.label}</strong>
                   <span className={`workflow-state ${step?.status ?? 'waiting'}`} role="status">{step?.status ?? 'waiting'}</span>
                 </div>
-                <p>{stage.detail}</p>
+                <p>{stage.id === 'revise' && !revisionEnabled ? 'Return the original draft and review findings.' : stage.detail}</p>
                 {step?.error && <p className="action-error" role="alert">{step.error}</p>}
                 {step?.output && <details open={stage.id === 'retrieve'}><summary>{stage.id === 'retrieve' ? step.output : 'View step output'}</summary>
                   {stage.id === 'retrieve' && result?.sources ? <>

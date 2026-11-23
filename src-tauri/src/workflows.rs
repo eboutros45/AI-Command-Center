@@ -10,13 +10,34 @@ use tauri::{Manager, ipc::Channel};
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ProposalRequest {
     library_root: String,
+    brief: String,
+    #[serde(flatten)]
+    setup: ProposalSetup,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ProposalSetup {
     knowledge_folder: String,
     query: String,
-    brief: String,
     drafter_path: String,
     reviewer_path: String,
     provider: Provider,
     model: String,
+    #[serde(default = "revision_default")]
+    revise_on_feedback: bool,
+}
+
+fn revision_default() -> bool {
+    true
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ProposalRecipe {
+    id: String,
+    name: String,
+    setup: ProposalSetup,
 }
 
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -57,6 +78,8 @@ pub(crate) struct ProposalRun {
     query: String,
     drafter: String,
     reviewer: String,
+    #[serde(default = "revision_default")]
+    revise_on_feedback: bool,
     sources: Option<SearchResult>,
     steps: Vec<Step>,
     proposal: Option<String>,
@@ -173,6 +196,11 @@ async fn draft_and_review<F, Fut>(
             record(run, notify, Stage::Revise, Status::Skipped, "The reviewer accepted the draft.".into(), None);
         }
         Some("REVISE") if lines.any(|line| !line.trim().is_empty()) => {
+            if !run.revise_on_feedback {
+                run.proposal = Some(draft);
+                record(run, notify, Stage::Revise, Status::Skipped, "Revision is off. The draft still has review findings.".into(), None);
+                return;
+            }
             run.proposal = generate_step(
                 run, notify, &mut generate, Stage::Revise,
                 format!("Revise the proposal using the review findings, the brief, and the supplied sources. {SOURCE_RULES} Include a short open issues section for anything you could not resolve.\n\nDrafting skill:\n{drafter}"),
@@ -182,6 +210,86 @@ async fn draft_and_review<F, Fut>(
         _ => record(run, notify, Stage::Review, Status::Failed, review,
             Some("The reviewer must start with PASS or REVISE and include findings when requesting revision.".into())),
     }
+}
+
+#[tauri::command]
+pub(crate) async fn list_proposal_recipes(
+    app: tauri::AppHandle,
+    library_root: String,
+) -> Result<Vec<ProposalRecipe>, String> {
+    let app_data = app.path().app_data_dir().map_err(crate::err)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let directory =
+            skill_runs::history_directory(&app_data, &library_root, "proposal-recipes")?;
+        skill_runs::stored_runs(&directory, usize::MAX)
+    })
+    .await
+    .map_err(crate::err)?
+}
+
+#[tauri::command]
+pub(crate) async fn save_proposal_recipe(
+    app: tauri::AppHandle,
+    library_root: String,
+    recipe_id: Option<String>,
+    name: String,
+    setup: ProposalSetup,
+) -> Result<ProposalRecipe, String> {
+    let name = name.trim().to_owned();
+    if name.is_empty() || name.chars().count() > 80 || name.contains(['\n', '\r']) {
+        return Err("Enter a recipe name of 1–80 characters.".into());
+    }
+    if setup.query.trim().is_empty()
+        || setup.query.chars().count() > 1000
+        || setup.model.trim().is_empty()
+        || setup.model.len() > 150
+    {
+        return Err("Enter source search terms and a model name before saving.".into());
+    }
+    let app_data = app.path().app_data_dir().map_err(crate::err)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = std::path::Path::new(&setup.knowledge_folder);
+        if !path.is_absolute() {
+            return Err("Enter the full path to a document folder.".into());
+        }
+        crate::canonical_dir(path)?;
+        skill_runs::load_snapshot(&library_root, &setup.drafter_path, RunKind::Skill)
+            .map_err(|error| format!("Drafting skill: {error}"))?;
+        skill_runs::load_snapshot(&library_root, &setup.reviewer_path, RunKind::Agent)
+            .map_err(|error| format!("Review agent: {error}"))?;
+        let directory =
+            skill_runs::history_directory(&app_data, &library_root, "proposal-recipes")?;
+        store_recipe(&directory, recipe_id, name, setup)
+    })
+    .await
+    .map_err(crate::err)?
+}
+
+fn store_recipe(
+    directory: &std::path::Path,
+    recipe_id: Option<String>,
+    name: String,
+    setup: ProposalSetup,
+) -> Result<ProposalRecipe, String> {
+    let existing: Vec<ProposalRecipe> = skill_runs::stored_runs(directory, usize::MAX)?;
+    if existing.iter().any(|recipe| {
+        Some(&recipe.id) != recipe_id.as_ref() && recipe.name.eq_ignore_ascii_case(&name)
+    }) {
+        return Err("A recipe with that name already exists.".into());
+    }
+    let id = match recipe_id {
+        Some(id)
+            if existing.iter().any(|recipe| recipe.id == id)
+                && id.bytes().all(|byte| byte.is_ascii_digit() || byte == b'-') =>
+        {
+            id
+        }
+        Some(_) => return Err("That recipe no longer exists. Save a new recipe.".into()),
+        None => skill_runs::run_identity()?.0,
+    };
+    let recipe = ProposalRecipe { id, name, setup };
+    skill_runs::save_run(directory, &recipe.id, &recipe)?;
+    Ok(recipe)
 }
 
 #[tauri::command]
@@ -207,9 +315,10 @@ pub(crate) async fn run_proposal(
     request: ProposalRequest,
     events: Channel<Step>,
 ) -> Result<ProposalResult, String> {
+    let setup = request.setup;
     let brief = request.brief.trim().to_owned();
-    let query = request.query.trim().to_owned();
-    let model = request.model.trim().to_owned();
+    let query = setup.query.trim().to_owned();
+    let model = setup.model.trim().to_owned();
     if brief.is_empty()
         || brief.chars().count() > 4_000
         || query.is_empty()
@@ -227,8 +336,8 @@ pub(crate) async fn run_proposal(
         let load = |path, kind, role| {
             skill_runs::load_snapshot(root, path, kind).map_err(|error| format!("{role}: {error}"))
         };
-        let drafter = load(&request.drafter_path, RunKind::Skill, "Drafting skill")?;
-        let reviewer = load(&request.reviewer_path, RunKind::Agent, "Review agent")?;
+        let drafter = load(&setup.drafter_path, RunKind::Skill, "Drafting skill")?;
+        let reviewer = load(&setup.reviewer_path, RunKind::Agent, "Review agent")?;
         Ok::<_, String>((directory, drafter, reviewer))
     })
     .await
@@ -250,12 +359,13 @@ pub(crate) async fn run_proposal(
     let mut run = ProposalRun {
         id,
         timestamp,
-        provider: request.provider,
+        provider: setup.provider,
         model: model.clone(),
         brief,
         query: query.clone(),
         drafter: drafter.clone(),
         reviewer: reviewer.clone(),
+        revise_on_feedback: setup.revise_on_feedback,
         sources: None,
         steps: Vec::new(),
         proposal: None,
@@ -271,7 +381,7 @@ pub(crate) async fn run_proposal(
         String::new(),
         None,
     );
-    match search_knowledge(request.knowledge_folder, query).await {
+    match search_knowledge(setup.knowledge_folder, query).await {
         Ok(sources) => {
             let count = sources.excerpts.len();
             run.sources = Some(sources);
@@ -300,8 +410,7 @@ pub(crate) async fn run_proposal(
                     |instructions, input| {
                         let model = &model;
                         async move {
-                            skill_runs::generate(request.provider, model, &instructions, &input)
-                                .await
+                            skill_runs::generate(setup.provider, model, &instructions, &input).await
                         }
                     },
                     &mut notify,
@@ -330,7 +439,10 @@ pub(crate) async fn run_proposal(
 mod tests {
     use super::*;
 
-    fn exercise(outputs: &[Result<&str, &str>]) -> (ProposalRun, Vec<String>) {
+    fn exercise(
+        revise_on_feedback: bool,
+        outputs: &[Result<&str, &str>],
+    ) -> (ProposalRun, Vec<String>) {
         let mut run = ProposalRun {
             id: "test".into(),
             timestamp: 0,
@@ -340,6 +452,7 @@ mod tests {
             query: "onboarding".into(),
             drafter: "Saved skill".into(),
             reviewer: "Saved agent".into(),
+            revise_on_feedback,
             sources: Some(serde_json::from_value(serde_json::json!({
                 "filesSearched": 1, "skippedFiles": 0, "limited": false,
                 "excerpts": [{ "path": "pricing.md", "startLine": 1, "endLine": 1, "text": "Onboarding includes two sessions." }]
@@ -370,11 +483,14 @@ mod tests {
 
     #[test]
     fn revision_is_bounded_and_receives_the_sources_draft_and_review() {
-        let (run, prompts) = exercise(&[
-            Ok("Original draft"),
-            Ok("REVISE\nAdd the session count."),
-            Ok("Revised proposal"),
-        ]);
+        let (run, prompts) = exercise(
+            true,
+            &[
+                Ok("Original draft"),
+                Ok("REVISE\nAdd the session count."),
+                Ok("Revised proposal"),
+            ],
+        );
         assert_eq!(prompts.len(), 3);
         assert!(prompts[2].contains("two sessions"));
         assert!(prompts[2].contains("Original draft"));
@@ -385,13 +501,78 @@ mod tests {
 
     #[test]
     fn accepted_draft_skips_revision_and_invalid_review_stops() {
-        let (accepted, prompts) = exercise(&[Ok("Original draft"), Ok("PASS\nLooks good.")]);
+        let (accepted, prompts) = exercise(true, &[Ok("Original draft"), Ok("PASS\nLooks good.")]);
         assert_eq!(prompts.len(), 2);
         assert_eq!(accepted.proposal.as_deref(), Some("Original draft"));
         assert!(matches!(accepted.steps[2].status, Status::Skipped));
-        let (failed, _) = exercise(&[Ok("Original draft"), Ok("No verdict here.")]);
+        let (failed, _) = exercise(true, &[Ok("Original draft"), Ok("No verdict here.")]);
         assert!(failed.proposal.is_none());
         assert!(matches!(failed.steps[1].status, Status::Failed));
         assert_eq!(failed.steps[0].output, "Original draft");
+    }
+
+    #[test]
+    fn revision_off_returns_draft_and_findings_without_a_third_call() {
+        let (run, prompts) = exercise(
+            false,
+            &[Ok("Original draft"), Ok("REVISE\nClarify the scope.")],
+        );
+        assert_eq!(prompts.len(), 2);
+        assert_eq!(run.proposal.as_deref(), Some("Original draft"));
+        assert!(matches!(run.steps[2].status, Status::Skipped));
+        assert!(run.steps[1].output.contains("Clarify the scope."));
+    }
+
+    #[test]
+    fn saved_recipe_updates_in_place_without_storing_a_brief() {
+        let directory = std::env::temp_dir().join(format!(
+            "command-center-recipes-{}",
+            skill_runs::run_identity().unwrap().0
+        ));
+        fs_guard(&directory, || {
+            let setup = || ProposalSetup {
+                knowledge_folder: "documents".into(),
+                query: "pricing".into(),
+                drafter_path: "writer".into(),
+                reviewer_path: "reviewer".into(),
+                provider: Provider::Ollama,
+                model: "gemma3:4b".into(),
+                revise_on_feedback: true,
+            };
+            let recipe = store_recipe(&directory, None, "First".into(), setup()).unwrap();
+            assert!(store_recipe(&directory, None, "first".into(), setup()).is_err());
+            let updated = store_recipe(
+                &directory,
+                Some(recipe.id),
+                "Renamed".into(),
+                ProposalSetup {
+                    revise_on_feedback: false,
+                    ..setup()
+                },
+            )
+            .unwrap();
+            let saved: Vec<ProposalRecipe> =
+                skill_runs::stored_runs(&directory, usize::MAX).unwrap();
+            assert_eq!(saved.len(), 1);
+            assert_eq!(saved[0].id, updated.id);
+            assert_eq!(saved[0].name, "Renamed");
+            assert!(!saved[0].setup.revise_on_feedback);
+            assert!(
+                serde_json::to_value(&saved[0])
+                    .unwrap()
+                    .get("brief")
+                    .is_none()
+            );
+        });
+    }
+
+    fn fs_guard(directory: &std::path::Path, test: impl FnOnce()) {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(test));
+        if directory.exists() {
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+        if let Err(error) = result {
+            std::panic::resume_unwind(error);
+        }
     }
 }

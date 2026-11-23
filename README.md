@@ -67,3 +67,5 @@ The app sends test inputs and saved instructions to OpenAI when you select **Run
 ## Try Workflows
 
 Open **Workflows**, enter a proposal brief and a document folder, then provide source search terms. Assign a saved drafting skill and review agent from your library, choose a model, and run the template. It retrieves excerpts, drafts a proposal, requests a review, and optionally revises once. Expand each step to inspect its output and the retrieved citations. Recent runs include stopped runs and are saved with the brief, source excerpts, and role snapshots on this device.
+
+Save the setup as a named **Recipe** to reuse it with a fresh brief. Recipes belong to the selected library. The workflow route shows whether the review passed, requested changes, or stopped.
