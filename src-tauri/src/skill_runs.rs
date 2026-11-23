@@ -9,17 +9,52 @@ use std::{
 use tauri::Manager;
 
 const RECENT_RUNS: usize = 30;
+const MAX_SOURCE_CHARS: usize = 8_000;
 static RUN_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Copy, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum RunKind {
+    #[default]
+    Skill,
+    Agent,
+}
+
+#[derive(Clone, Copy, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Provider {
+    #[default]
+    Ollama,
+    OpenAi,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReferencedSkill {
+    name: String,
+    relative_path: String,
+    fingerprint: String,
+    source: String,
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct SkillRun {
+pub(crate) struct TestRun {
     id: String,
     timestamp: u64,
-    skill_name: String,
-    skill_path: String,
+    #[serde(default)]
+    kind: RunKind,
+    #[serde(default)]
+    provider: Provider,
+    #[serde(alias = "skillName")]
+    asset_name: String,
+    #[serde(alias = "skillPath")]
+    asset_path: String,
     fingerprint: String,
-    skill_source: String,
+    #[serde(alias = "skillSource")]
+    asset_source: String,
+    #[serde(default)]
+    referenced_skills: Vec<ReferencedSkill>,
     model: String,
     input: String,
     output: String,
@@ -28,7 +63,7 @@ pub(crate) struct SkillRun {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RunResult {
-    run: SkillRun,
+    run: TestRun,
     save_error: Option<String>,
 }
 
@@ -39,7 +74,7 @@ fn history_directory(app_data: &Path, library: &str) -> Result<PathBuf, String> 
         .join(super::fingerprint(&root.to_string_lossy())))
 }
 
-fn save_run(directory: &Path, run: &SkillRun) -> Result<(), String> {
+fn save_run(directory: &Path, run: &TestRun) -> Result<(), String> {
     let bytes = serde_json::to_vec(run).map_err(super::err)?;
     fs::create_dir_all(directory).map_err(super::err)?;
     let temporary = directory.join(format!("{}.tmp", run.id));
@@ -55,7 +90,7 @@ fn save_run(directory: &Path, run: &SkillRun) -> Result<(), String> {
     result.map_err(super::err)
 }
 
-fn recent_runs(directory: &Path) -> Result<Vec<SkillRun>, String> {
+fn recent_runs(directory: &Path) -> Result<Vec<TestRun>, String> {
     let entries = match fs::read_dir(directory) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -83,10 +118,10 @@ fn recent_runs(directory: &Path) -> Result<Vec<SkillRun>, String> {
 }
 
 #[tauri::command]
-pub(crate) async fn list_skill_runs(
+pub(crate) async fn list_runs(
     app: tauri::AppHandle,
     library_root: String,
-) -> Result<Vec<SkillRun>, String> {
+) -> Result<Vec<TestRun>, String> {
     let app_data = app.path().app_data_dir().map_err(super::err)?;
     tauri::async_runtime::spawn_blocking(move || {
         recent_runs(&history_directory(&app_data, &library_root)?)
@@ -95,11 +130,110 @@ pub(crate) async fn list_skill_runs(
     .map_err(super::err)?
 }
 
+struct AssetSnapshot {
+    name: String,
+    path: String,
+    fingerprint: String,
+    source: String,
+    referenced_skills: Vec<ReferencedSkill>,
+}
+
+fn read_skill_snapshot(root: &str, path: &str) -> Result<AssetSnapshot, String> {
+    let skill = super::read_skill(root.to_owned(), path.to_owned())?;
+    let fields = super::split_frontmatter(&skill.content)?;
+    if fields
+        .name
+        .as_deref()
+        .is_none_or(|name| name.trim().is_empty())
+        || fields
+            .description
+            .as_deref()
+            .is_none_or(|description| description.trim().is_empty())
+    {
+        return Err("A test skill must have a name and description.".into());
+    }
+    Ok(AssetSnapshot {
+        name: fields.name.unwrap(),
+        path: skill.path,
+        source: skill.content,
+        fingerprint: skill.fingerprint,
+        referenced_skills: Vec::new(),
+    })
+}
+
+fn referenced_skill<'a>(
+    reference: &str,
+    skills: &'a [super::Skill],
+) -> Result<&'a super::Skill, String> {
+    let mut matches = skills.iter().filter(|skill| {
+        skill.name.eq_ignore_ascii_case(reference)
+            || Path::new(&skill.path)
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case(reference))
+    });
+    let skill = matches.next().ok_or_else(|| format!("Referenced skill “{reference}” was not found. Update the agent’s skills list or add the skill to this library."))?;
+    if matches.next().is_some() {
+        return Err(format!(
+            "Referenced skill “{reference}” matches more than one library skill. Give it a unique name."
+        ));
+    }
+    Ok(skill)
+}
+
+fn load_snapshot(root: &str, path: &str, kind: RunKind) -> Result<AssetSnapshot, String> {
+    match kind {
+        RunKind::Skill => read_skill_snapshot(root, path),
+        RunKind::Agent => {
+            let agent = super::read_agent(root.to_owned(), path.to_owned())?;
+            let fields = super::split_agent_frontmatter(&agent.content)?;
+            if agent.status != "valid" {
+                return Err("Fix the agent’s validation errors before testing.".into());
+            }
+            let mut total_chars = agent.content.chars().count();
+            if total_chars > MAX_SOURCE_CHARS || fields.skills.len() > 16 {
+                return Err(
+                    "Use an agent under 8,000 characters with at most 16 referenced skills.".into(),
+                );
+            }
+            let mut referenced_skills = Vec::new();
+            let mut paths = std::collections::HashSet::new();
+            if !fields.skills.is_empty() {
+                let library = super::scan_library(root.to_owned())?;
+                for reference in fields.skills {
+                    let skill = referenced_skill(&reference, &library.skills)?;
+                    if paths.insert(&skill.path) {
+                        let snapshot = read_skill_snapshot(root, &skill.path)?;
+                        total_chars += snapshot.source.chars().count();
+                        if total_chars > MAX_SOURCE_CHARS {
+                            return Err("Use fewer or shorter referenced skills. Combined test source is limited to 8,000 characters.".into());
+                        }
+                        referenced_skills.push(ReferencedSkill {
+                            name: snapshot.name,
+                            relative_path: skill.relative_path.clone(),
+                            fingerprint: snapshot.fingerprint,
+                            source: snapshot.source,
+                        });
+                    }
+                }
+            }
+            Ok(AssetSnapshot {
+                name: agent.name,
+                path: agent.path,
+                fingerprint: agent.fingerprint,
+                source: agent.content,
+                referenced_skills,
+            })
+        }
+    }
+}
+
 #[tauri::command]
-pub(crate) async fn run_skill_test(
+pub(crate) async fn run_test(
     app: tauri::AppHandle,
     library_root: String,
-    skill_path: String,
+    asset_path: String,
+    kind: RunKind,
+    provider: Provider,
     model: String,
     input: String,
 ) -> Result<RunResult, String> {
@@ -108,31 +242,46 @@ pub(crate) async fn run_skill_test(
         return Err("Enter an example input of up to 4,000 characters.".into());
     }
     let app_data = app.path().app_data_dir().map_err(super::err)?;
-    let (directory, skill) = tauri::async_runtime::spawn_blocking(move || {
+    let (directory, asset) = tauri::async_runtime::spawn_blocking(move || {
         let directory = history_directory(&app_data, &library_root)?;
-        let skill = super::read_skill(library_root, skill_path)?;
-        Ok::<_, String>((directory, skill))
+        let asset = load_snapshot(&library_root, &asset_path, kind)?;
+        Ok::<_, String>((directory, asset))
     })
     .await
     .map_err(super::err)??;
-    if skill.status != "valid" || skill.content.chars().count() > 8_000 {
-        return Err("Choose a valid saved skill with source under 8,000 characters.".into());
+    if asset.source.chars().count() > MAX_SOURCE_CHARS {
+        return Err("Choose a saved asset with source under 8,000 characters.".into());
     }
     let model = model.trim().to_owned();
-    let system = format!(
-        "Respond to the example input using the saved skill below. Use the skill as guidance for this text response. If it calls for tools or external actions, explain what additional information or access you would need.\n\n{}",
-        skill.content
+    if model.is_empty() || model.len() > 150 {
+        return Err("Enter a model name up to 150 bytes.".into());
+    }
+    let mut system = format!(
+        "Respond to the example input using the saved instructions below. This is a text-only preview. If the instructions call for tools or external actions, explain what additional access you would need.\n\n{}",
+        asset.source
     );
-    let output = super::ollama::generate(&model, &system, &input).await?;
+    for skill in &asset.referenced_skills {
+        system.push_str(&format!(
+            "\n\nReferenced skill: {}\n\n{}",
+            skill.name, skill.source
+        ));
+    }
+    let output = match provider {
+        Provider::Ollama => super::ollama::generate(&model, &system, &input).await?,
+        Provider::OpenAi => super::openai::generate(&model, &system, &input).await?,
+    };
     let timestamp = UNIX_EPOCH.elapsed().map_err(super::err)?.as_millis() as u64;
     let sequence = RUN_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let run = SkillRun {
+    let run = TestRun {
         id: format!("{timestamp:020}-{:010}-{sequence:020}", std::process::id()),
         timestamp,
-        skill_name: skill.name,
-        skill_path: skill.path,
-        fingerprint: skill.fingerprint,
-        skill_source: skill.content,
+        kind,
+        provider,
+        asset_name: asset.name,
+        asset_path: asset.path,
+        fingerprint: asset.fingerprint,
+        asset_source: asset.source,
+        referenced_skills: asset.referenced_skills,
         model,
         input,
         output,
@@ -150,6 +299,57 @@ mod tests {
     use super::*;
 
     #[test]
+    fn agent_snapshot_resolves_skill_folder_names_and_rejects_missing_references() {
+        let root = std::env::temp_dir().join(format!(
+            "command-center-agent-run-{}-{}",
+            std::process::id(),
+            UNIX_EPOCH.elapsed().unwrap().as_nanos(),
+        ));
+        let exercise = || -> Result<(AssetSnapshot, Result<AssetSnapshot, String>), String> {
+            let skill = root.join("review");
+            let agent = root.join("agents").join("editor.md");
+            fs::create_dir_all(&skill).map_err(super::super::err)?;
+            fs::create_dir_all(root.join("agents")).map_err(super::super::err)?;
+            fs::write(
+                skill.join("SKILL.md"),
+                "---\nname: Review Drafts\ndescription: Reviews drafts.\n---\nReview the draft.",
+            )
+            .map_err(super::super::err)?;
+            let write_agent = |reference: &str| {
+                fs::write(&agent, format!(
+                "---\nname: editor\ndescription: Edits drafts.\nskills: [{reference}]\n---\nEdit the draft."
+            )).map_err(super::super::err)
+            };
+            write_agent("review")?;
+            let snapshot = load_snapshot(
+                &root.to_string_lossy(),
+                &agent.to_string_lossy(),
+                RunKind::Agent,
+            )?;
+            write_agent("missing")?;
+            let missing = load_snapshot(
+                &root.to_string_lossy(),
+                &agent.to_string_lossy(),
+                RunKind::Agent,
+            );
+            Ok((snapshot, missing))
+        };
+        let result = exercise();
+        fs::remove_dir_all(root).unwrap();
+        let (snapshot, missing) = result.unwrap();
+        assert_eq!(snapshot.referenced_skills.len(), 1);
+        assert_eq!(snapshot.referenced_skills[0].name, "Review Drafts");
+        assert!(
+            snapshot.referenced_skills[0]
+                .source
+                .ends_with("Review the draft.")
+        );
+        assert!(
+            matches!(missing, Err(message) if message.contains("Referenced skill “missing” was not found"))
+        );
+    }
+
+    #[test]
     fn history_keeps_exact_skill_and_input_snapshots() {
         let directory = std::env::temp_dir().join(format!(
             "command-center-history-{}-{}",
@@ -157,33 +357,49 @@ mod tests {
             UNIX_EPOCH.elapsed().unwrap().as_nanos()
         ));
         fs::create_dir(&directory).unwrap();
-        let exercise = || -> Result<Vec<SkillRun>, String> {
-            let mut run = SkillRun {
-                id: "001".into(),
-                timestamp: 1,
-                skill_name: "Reviewer".into(),
-                skill_path: "reviewer".into(),
-                fingerprint: "first-fingerprint".into(),
-                skill_source: "First instructions".into(),
-                model: "gemma3:4b".into(),
-                input: "First draft".into(),
-                output: "First review".into(),
+        let exercise =
+            || -> Result<Vec<TestRun>, String> {
+                fs::write(directory.join("001.json"), serde_json::json!({
+                "id": "001", "timestamp": 1, "skillName": "Reviewer", "skillPath": "reviewer",
+                "fingerprint": "first-fingerprint", "skillSource": "First instructions",
+                "model": "gemma3:4b", "input": "First draft", "output": "First review"
+            }).to_string()).map_err(super::super::err)?;
+                let run = TestRun {
+                    id: "002".into(),
+                    timestamp: 2,
+                    kind: RunKind::Agent,
+                    provider: Provider::OpenAi,
+                    asset_name: "Reviewer".into(),
+                    asset_path: "reviewer".into(),
+                    fingerprint: "second-fingerprint".into(),
+                    asset_source: "Updated instructions".into(),
+                    referenced_skills: vec![ReferencedSkill {
+                        name: "Review".into(),
+                        relative_path: "review".into(),
+                        fingerprint: "reference-fingerprint".into(),
+                        source: "Referenced instructions".into(),
+                    }],
+                    model: "gpt-4.1-mini".into(),
+                    input: "First draft".into(),
+                    output: "First review".into(),
+                };
+                save_run(&directory, &run)?;
+                fs::write(directory.join("incomplete.tmp"), "{").map_err(super::super::err)?;
+                recent_runs(&directory)
             };
-            save_run(&directory, &run)?;
-            run.id = "002".into();
-            run.timestamp = 2;
-            run.fingerprint = "second-fingerprint".into();
-            run.skill_source = "Updated instructions".into();
-            save_run(&directory, &run)?;
-            fs::write(directory.join("incomplete.tmp"), "{").map_err(super::super::err)?;
-            recent_runs(&directory)
-        };
         let history = exercise();
         fs::remove_dir_all(directory).unwrap();
         let history = history.unwrap();
         assert_eq!(history.len(), 2);
-        assert_eq!(history[0].skill_source, "Updated instructions");
-        assert_eq!(history[1].skill_source, "First instructions");
+        assert_eq!(history[0].asset_source, "Updated instructions");
+        assert!(matches!(history[0].provider, Provider::OpenAi));
+        assert_eq!(
+            history[0].referenced_skills[0].source,
+            "Referenced instructions"
+        );
+        assert_eq!(history[1].asset_source, "First instructions");
+        assert!(matches!(history[1].kind, RunKind::Skill));
+        assert!(matches!(history[1].provider, Provider::Ollama));
         assert_eq!(history[1].fingerprint, "first-fingerprint");
         assert_eq!(history[1].input, "First draft");
         assert_eq!(history[1].output, "First review");

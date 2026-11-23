@@ -10,6 +10,7 @@ use walkdir::WalkDir;
 
 mod knowledge;
 mod ollama;
+mod openai;
 mod skill_runs;
 
 #[derive(Serialize, Clone)]
@@ -481,7 +482,8 @@ fn scan_library(root: String) -> Result<Library, String> {
 fn read_skill(root: String, skill_path: String) -> Result<SkillDocument, String> {
     let root = canonical_dir(Path::new(&root))?;
     let dir = within(&root, Path::new(&skill_path))?;
-    let content = fs::read_to_string(dir.join("SKILL.md")).map_err(err)?;
+    let entry = within(&dir, &dir.join("SKILL.md"))?;
+    let content = fs::read_to_string(entry).map_err(err)?;
     let skill = inspect(&root, &dir);
     Ok(SkillDocument {
         name: skill.name,
@@ -1209,8 +1211,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             knowledge::search_knowledge,
             knowledge::answer_from_sources,
-            skill_runs::run_skill_test,
-            skill_runs::list_skill_runs,
+            skill_runs::run_test,
+            skill_runs::list_runs,
             scan_library,
             read_skill,
             save_skill,

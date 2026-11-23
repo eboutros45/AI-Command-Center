@@ -153,7 +153,7 @@ function App() {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [result, setResult] = useState<{ message: string; path: string } | null>(null)
   const [workspaceView, setWorkspaceView] = useState<'knowledge' | 'run' | null>(null)
-  const [testSkillPath, setTestSkillPath] = useState('')
+  const [testAsset, setTestAsset] = useState<{ kind: 'skill' | 'agent'; path: string } | null>(null)
 
   const isDirty = Boolean(selected && draft !== selected.document.content)
 
@@ -506,7 +506,7 @@ function App() {
           <button className={!workspaceView && kind === 'agents' ? 'active' : ''} onClick={() => { setWorkspaceView(null); switchKind('agents') }}>Agents <span>{library?.agents.length ?? 0}</span></button>
         </nav>
         <button className={`knowledge-nav ${workspaceView === 'knowledge' ? 'current' : ''}`} aria-pressed={workspaceView === 'knowledge'} onClick={() => setWorkspaceView('knowledge')}>Knowledge</button>
-        <button className={`knowledge-nav ${workspaceView === 'run' ? 'current' : ''}`} aria-pressed={workspaceView === 'run'} onClick={() => { setTestSkillPath(''); setWorkspaceView('run') }}>Run &amp; Test</button>
+        <button className={`knowledge-nav ${workspaceView === 'run' ? 'current' : ''}`} aria-pressed={workspaceView === 'run'} onClick={() => { setTestAsset(null); setWorkspaceView('run') }}>Run &amp; Test</button>
         <div className="folder-scroll">
           {!workspaceView && <>
           <div className="pane-title"><span>Folders</span><button className="icon-button" aria-label="New folder" title="New folder" onClick={() => openCreationDialog('folder')} disabled={!library || busy}>+</button></div>
@@ -519,7 +519,7 @@ function App() {
       </aside>
 
       {workspaceView === 'knowledge' ? <Knowledge libraryRoot={library?.root} skills={library?.skills ?? []} desktop={isTauri()} /> : workspaceView === 'run' ?
-        <RunAndTest key={library?.root} libraryRoot={library?.root} skills={library?.skills ?? []} initialSkillPath={testSkillPath} openLibrary={chooseRoot} /> : <section className="workspace">
+        <RunAndTest key={library?.root} libraryRoot={library?.root} skills={library?.skills ?? []} agents={library?.agents ?? []} initialAsset={testAsset} openLibrary={chooseRoot} /> : <section className="workspace">
         <header className="workspace-head">
           <div className="workspace-location"><span>{kind === 'skills' ? 'Skills' : 'Agents'} /</span><strong title={selectedCategory}>{selectedCategory.split('/').at(-1) || 'All folders'}</strong></div>
           {library && <div className="header-actions">
@@ -549,7 +549,14 @@ function App() {
           {selected ? <>
             <div className="studio-head">
               <div><div className="eyebrow">{selected.kind === 'skills' ? 'Portable skill' : 'Claude Code agent'}</div><h2>{selected.document.name}</h2><p>{selected.document.path}</p></div>
-              <div className="head-status"><span className={`status ${selected.document.status}`}>{selected.document.status}</span>{isDirty && <span className="dirty-dot">Unsaved</span>}{selected.kind === 'skills' && selected.document.status === 'valid' && <button onClick={() => { setTestSkillPath(selected.document.path); setWorkspaceView('run') }}>Test saved skill</button>}</div>
+              <div className="head-status">
+                <span className={`status ${selected.document.status}`}>{selected.document.status}</span>
+                {isDirty && <span className="dirty-dot">Unsaved</span>}
+                {selected.document.status === 'valid' && <button onClick={() => {
+                  setTestAsset({ kind: selected.kind === 'skills' ? 'skill' : 'agent', path: selected.document.path })
+                  setWorkspaceView('run')
+                }}>Test saved {selected.kind === 'skills' ? 'skill' : 'agent'}</button>}
+              </div>
             </div>
             <div className="studio-tabs" role="tablist">
               {(['overview', 'source', 'files', 'quality', 'publish'] as StudioTab[]).map(item => <button key={item} className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{item[0].toUpperCase() + item.slice(1)}</button>)}

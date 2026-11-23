@@ -37,7 +37,7 @@ Install Git, Node.js LTS, Rust with the MSVC toolchain, Microsoft C++ Build Tool
 - Export a portable ZIP to a selected folder. Install skills in personal or project Claude Code locations. If Windows denies link creation, the app installs a copy.
 - Install agents as verified Markdown copies to personal or project Claude Code locations.
 - Search a local document folder and generate cited answers with Ollama in Knowledge.
-- Test saved skills with Ollama and reopen recent results with their exact Markdown snapshots in Run & Test.
+- Test saved skills or agents with Ollama or OpenAI and reopen recent results with their exact Markdown snapshots in Run & Test.
 
 Local Claude Code installation does not imply that a running session has loaded a capability. ZIP export requires manual upload for account-level Claude access. See [Capability Studio architecture](docs/CAPABILITY_STUDIO.md) for the product model and future extension seams.
 
@@ -48,3 +48,17 @@ Local Claude Code installation does not imply that a running session has loaded 
 3. For generation, start Ollama and download a model, for example `ollama pull gemma3:4b`. Enter the model's exact name, optionally choose a saved skill from your library, then select **Generate answer**.
 
 Retrieval uses keywords and reads the current files on each search. Generation sends the selected excerpts to Ollama at `127.0.0.1:11434`. To enforce local-only operation in Ollama, set `OLLAMA_NO_CLOUD=1` in its environment and restart Ollama.
+
+## Try Run & Test
+
+Open a saved skill or agent and select **Test saved skill** or **Test saved agent**. Choose a provider, enter an example, and run it. Agent previews include the saved content of referenced skills and use the model selected for the test. Previews generate text only. Recent runs record the input, output, provider, model, and source snapshots on this device.
+
+For OpenAI, supply `OPENAI_API_KEY` in the environment that starts the desktop app. In PowerShell 5.1, enter the key at a masked prompt and start the app in the same window.
+
+```powershell
+$key = Read-Host 'OpenAI API key' -AsSecureString
+$env:OPENAI_API_KEY = [System.Net.NetworkCredential]::new('', $key).Password
+npm run tauri dev
+```
+
+The app sends test inputs and saved instructions to OpenAI when you select **Run with OpenAI**. API usage may incur charges.

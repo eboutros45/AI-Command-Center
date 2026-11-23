@@ -32,3 +32,4 @@
 .run-history button { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; width: 100%; text-align: left; }
 .run-history button[aria-pressed='true'] { border-color: var(--green); background: var(--green-soft); }
 .run-history span { color: var(--muted); font-size: 11px; text-align: right; }
+.knowledge-card .provider-notice { padding: 10px; border-left: 3px solid var(--green); background: var(--green-soft); }
