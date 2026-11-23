@@ -44,6 +44,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-log",
  "walkdir",
+ "windows-sys 0.61.2",
  "zip",
 ]
 

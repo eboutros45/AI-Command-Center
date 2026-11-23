@@ -36,8 +36,8 @@ Install Git, Node.js LTS, Rust with the MSVC toolchain, Microsoft C++ Build Tool
 - Detect save conflicts using content fingerprints.
 - Export a portable ZIP to a selected folder. Install skills in personal or project Claude Code locations. If Windows denies link creation, the app installs a copy.
 - Install agents as verified Markdown copies to personal or project Claude Code locations.
-- Search a local document folder and generate cited answers with Ollama in Knowledge.
-- Test saved skills or agents with Ollama or OpenAI and reopen recent results with their exact Markdown snapshots in Run & Test.
+- Search a local document folder and generate cited answers with Ollama or Groq in Knowledge.
+- Test saved skills or agents with Ollama or Groq and reopen recent results with their exact Markdown snapshots in Run & Test.
 - Run a proposal workflow with a drafting skill, a review agent, and sources from a local document folder.
 - Watch live run cards in **Agent Activity**. Select a card to inspect its step timeline, including the role, model, elapsed time, and outcome.
 
@@ -57,15 +57,15 @@ Open a saved skill or agent and select **Test saved skill** or **Test saved agen
 
 Rate a saved run or add evaluation notes, then choose **Set as baseline** to keep it as your library's comparison reference. Use **Use baseline input** to run the same example again. Select another result to compare outputs, notes, models, and saved instructions side by side.
 
-For OpenAI, supply `OPENAI_API_KEY` in the environment that starts the desktop app. In PowerShell 5.1, enter the key at a masked prompt and start the app in the same window.
+For Groq, supply `GROQ_API_KEY` in the environment that starts the desktop app. In PowerShell 5.1, enter the key at a masked prompt and start the app in the same window.
 
 ```powershell
-$key = Read-Host 'OpenAI API key' -AsSecureString
-$env:OPENAI_API_KEY = [System.Net.NetworkCredential]::new('', $key).Password
+$key = Read-Host 'Groq API key' -AsSecureString
+$env:GROQ_API_KEY = [System.Net.NetworkCredential]::new('', $key).Password
 npm run tauri dev
 ```
 
-The app sends test inputs and saved instructions to OpenAI when you select **Run with OpenAI**. API usage may incur charges.
+Select **Groq (hosted)** in Run & Test, Workflows, or Knowledge and enter a Groq model ID. The app sends the inputs for the selected steps to Groq when you run them. Existing OpenAI workflow recipes keep their saved provider. Select Groq on those steps and update the recipe to switch.
 
 ## Try Workflows
 

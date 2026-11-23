@@ -10,6 +10,7 @@ use walkdir::WalkDir;
 
 mod activity;
 mod agent_creator;
+mod groq;
 mod knowledge;
 mod ollama;
 mod openai;
@@ -1118,37 +1119,51 @@ fn install_skill(
     Ok(destination.to_string_lossy().into_owned())
 }
 
+#[cfg(target_os = "windows")]
+mod windows_file_manager;
+
 #[tauri::command]
-fn reveal_in_file_manager(path: String) -> Result<(), String> {
-    let path = PathBuf::from(path);
-    if !path.exists() {
-        return Err("Path is unavailable".into());
-    }
+async fn reveal_in_file_manager(path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = Path::new(&path);
+        if !path.is_absolute() {
+            return Err("Enter an absolute path to open in the file manager.".into());
+        }
+        let path = dunce::canonicalize(path)
+            .map_err(|error| format!("Could not open {}: {error}", path.display()))?;
+        open_in_file_manager(&path)
+    })
+    .await
+    .map_err(err)?
+}
+
+#[cfg(not(target_os = "windows"))]
+fn open_in_file_manager(path: &Path) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let mut command = {
         let mut c = std::process::Command::new("open");
-        c.arg("-R").arg(&path);
+        if !path.is_dir() {
+            c.arg("-R");
+        }
+        c.arg(path);
         c
     };
     #[cfg(target_os = "linux")]
     let mut command = {
         let mut c = std::process::Command::new("xdg-open");
         c.arg(if path.is_dir() {
-            &path
+            path
         } else {
-            path.parent().unwrap_or(&path)
+            path.parent().unwrap_or(path)
         });
-        c
-    };
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut c = std::process::Command::new("explorer");
-        c.arg(format!("/select,{}", path.display()));
         c
     };
     command.spawn().map_err(err)?;
     Ok(())
 }
+
+#[cfg(target_os = "windows")]
+use windows_file_manager::open_in_file_manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

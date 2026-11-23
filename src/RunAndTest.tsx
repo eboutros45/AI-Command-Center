@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { groqDefaultModel, modelSettings, providerNames, type CurrentProvider, type Provider } from './providers'
 import './Knowledge.css'
 
 type RunKind = 'skill' | 'agent'
-type Provider = 'ollama' | 'openai'
 type Rating = '' | 'meets_expectation' | 'needs_work'
 type Evaluation = { rating: Exclude<Rating, ''> | null; notes: string }
 type TestRun = {
@@ -24,7 +24,6 @@ type TestRun = {
 
 type RunResult = { run: TestRun; saveError: string | null }
 type AssetOption = { path: string; name: string; status: string }
-const providerNames = { ollama: 'Ollama', openai: 'OpenAI' }
 const ratingLabels = { meets_expectation: 'Meets expectation', needs_work: 'Needs work' }
 
 function EvaluationForm({ run, busy, onSave }: { run: TestRun; busy: boolean; onSave: (evaluation: Evaluation) => Promise<boolean> }) {
@@ -92,10 +91,10 @@ export default function RunAndTest({ libraryRoot, initialAsset, skills, agents, 
 }) {
   const [kind, setKind] = useState<RunKind>(initialAsset?.kind ?? 'skill')
   const [assetPath, setAssetPath] = useState(initialAsset?.path ?? '')
-  const [provider, setProvider] = useState<Provider>('ollama')
+  const [provider, setProvider] = useState<CurrentProvider>('ollama')
   const [models, setModels] = useState(() => ({
     ollama: localStorage.getItem('knowledgeModel') ?? '',
-    openai: localStorage.getItem('testOpenAiModel') ?? 'gpt-4.1-mini',
+    groq: localStorage.getItem(modelSettings.groq) ?? groqDefaultModel,
   }))
   const [input, setInput] = useState('')
   const inputField = useRef<HTMLTextAreaElement>(null)
@@ -147,7 +146,7 @@ export default function RunAndTest({ libraryRoot, initialAsset, skills, agents, 
         model: model.trim(),
         input: input.trim(),
       })
-      localStorage.setItem(provider === 'ollama' ? 'knowledgeModel' : 'testOpenAiModel', run.model)
+      localStorage.setItem(modelSettings[provider], run.model)
       setSelected(run)
       if (saveError) {
         setRunError(`Model returned an answer, but the run could not be saved. ${saveError}`)
@@ -226,20 +225,20 @@ export default function RunAndTest({ libraryRoot, initialAsset, skills, agents, 
             </label>
             {!validAssets.length && <p>Create a valid {kind} to run a test.</p>}
             <label>Provider
-              <select value={provider} onChange={event => { setProvider(event.target.value as Provider); setRunError('') }} disabled={pending}>
+              <select value={provider} onChange={event => { setProvider(event.target.value as CurrentProvider); setRunError('') }} disabled={pending}>
                 <option value="ollama">Ollama (local)</option>
-                <option value="openai">OpenAI (hosted)</option>
+                <option value="groq">Groq (hosted)</option>
               </select>
             </label>
-            <label>{provider === 'ollama' ? 'Installed Ollama model' : 'OpenAI model ID'}
-              <input value={model} placeholder={provider === 'ollama' ? 'gemma3:4b' : 'gpt-4.1-mini'} onChange={event => setModels({ ...models, [provider]: event.target.value })} required maxLength={150} disabled={pending} />
+            <label>{provider === 'ollama' ? 'Installed Ollama model' : 'Groq model ID'}
+              <input value={model} placeholder={provider === 'ollama' ? 'gemma3:4b' : groqDefaultModel} onChange={event => setModels({ ...models, [provider]: event.target.value })} required maxLength={150} disabled={pending} />
             </label>
             <label>Example input
               <textarea ref={inputField} value={input} onChange={event => setInput(event.target.value)} rows={4} maxLength={4000} required disabled={pending} />
             </label>
             <p>{kind === 'agent' ? 'Agent tests include referenced library skills and use the selected model for a text-only preview.' : 'Skill tests use the saved SKILL.md as text instructions.'} Completed runs are saved locally.</p>
-            {provider === 'openai' && <p className="provider-notice">Running with OpenAI sends the saved {kind}{kind === 'agent' ? ', its referenced skills,' : ''} and your example to OpenAI. API charges may apply. Set <code>OPENAI_API_KEY</code> before launching the app.</p>}
-            <button className="primary" disabled={pending || historyLoading || !selectedAsset || !model.trim() || !input.trim()}>{pending ? 'Running…' : provider === 'openai' ? 'Run with OpenAI' : 'Run test'}</button>
+            {provider === 'groq' && <p className="provider-notice">Running with Groq sends the saved {kind}{kind === 'agent' ? ', its referenced skills,' : ''} and your example to Groq. Set <code>GROQ_API_KEY</code> before launching the app.</p>}
+            <button className="primary" disabled={pending || historyLoading || !selectedAsset || !model.trim() || !input.trim()}>{pending ? 'Running…' : provider === 'groq' ? 'Run with Groq' : 'Run test'}</button>
             {runError && <p className="action-error" role="alert">{runError}</p>}
           </form>
           {baseline && <section className="knowledge-card" aria-label="Comparison baseline">

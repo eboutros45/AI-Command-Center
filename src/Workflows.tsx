@@ -1,8 +1,8 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Channel, invoke } from '@tauri-apps/api/core'
+import { groqDefaultModel, modelSettings, providerNames, type Provider } from './providers'
 import './Knowledge.css'
 
-type Provider = 'ollama' | 'openai'
 type Stage = 'retrieve' | 'draft' | 'review' | 'revise'
 type ModelTarget = { provider: Provider; model: string }
 type Step = { stage: Stage; status: 'running' | 'complete' | 'failed' | 'skipped'; output: string; error: string | null; execution?: ModelTarget }
@@ -48,7 +48,6 @@ const stages: { id: Stage; label: string; detail: string }[] = [
   { id: 'review', label: 'Review draft', detail: 'Ask the review agent to check it against the brief and sources.' },
   { id: 'revise', label: 'Revise if needed', detail: 'Make one revision when the reviewer requests changes.' },
 ]
-const providerNames = { ollama: 'Ollama', openai: 'OpenAI' }
 
 function StepModelOverride({ step, value, onChange, defaults }: {
   step: 'Review' | 'Revision'
@@ -64,7 +63,8 @@ function StepModelOverride({ step, value, onChange, defaults }: {
       }}>
         <option value="">Use drafting model</option>
         <option value="ollama">Ollama (local)</option>
-        <option value="openai">OpenAI (hosted)</option>
+        <option value="groq">Groq (hosted)</option>
+        {value?.provider === 'openai' && <option value="openai">OpenAI (saved recipe)</option>}
       </select></label>
       {value && <label>{step} model<input required maxLength={150} value={value.model} onChange={event => onChange({ ...value, model: event.target.value })} /></label>}
     </div>
@@ -122,6 +122,7 @@ export default function Workflows({ libraryRoot, skills, agents, openLibrary }: 
   const [reviewDraft, setReviewDraft] = useState(true)
   const [models, setModels] = useState(() => ({
     ollama: localStorage.getItem('knowledgeModel') ?? '',
+    groq: localStorage.getItem(modelSettings.groq) ?? groqDefaultModel,
     openai: localStorage.getItem('testOpenAiModel') ?? 'gpt-4.1-mini',
   }))
   const [runs, setRuns] = useState<ProposalRun[]>([])
@@ -169,11 +170,15 @@ export default function Workflows({ libraryRoot, skills, agents, openLibrary }: 
     && Boolean(setup.model && drafter) && (!reviewDraft || Boolean(reviewer)) && !missingDraft && !missingReview
     && (!setup.reviewModel || Boolean(setup.reviewModel.model)) && (!setup.revisionModel || Boolean(setup.revisionModel.model))
   const ready = configured && brief.trim()
-  const hostedSteps = [
-    provider === 'openai' ? 'Draft' : '',
-    reviewDraft && (setup.reviewModel?.provider ?? provider) === 'openai' ? 'Review' : '',
-    setup.reviseOnFeedback && (setup.revisionModel?.provider ?? provider) === 'openai' ? 'Revision (if needed)' : '',
-  ].filter(Boolean)
+  const hosted = (['groq', 'openai'] as const).map(destination => ({
+    destination,
+    steps: [
+      provider === destination ? 'Draft' : '',
+      reviewDraft && (setup.reviewModel?.provider ?? provider) === destination ? 'Review' : '',
+      setup.reviseOnFeedback && (setup.revisionModel?.provider ?? provider) === destination ? 'Revision (if needed)' : '',
+    ].filter(Boolean),
+  })).filter(group => group.steps.length > 0)
+  const runLabel = hosted.length > 0 ? `Run workflow with ${hosted.map(group => providerNames[group.destination]).join(' and ')}` : 'Run workflow'
 
   const loadRecipe = (id: string) => {
     const recipe = recipes.find(item => item.id === id)
@@ -305,9 +310,10 @@ export default function Workflows({ libraryRoot, skills, agents, openLibrary }: 
                 </select></label>}
                 <label>Draft provider<select value={provider} onChange={event => setProvider(event.target.value as Provider)}>
                   <option value="ollama">Ollama (local)</option>
-                  <option value="openai">OpenAI (hosted)</option>
+                  <option value="groq">Groq (hosted)</option>
+                  {provider === 'openai' && <option value="openai">OpenAI (saved recipe)</option>}
                 </select></label>
-                <label>{provider === 'ollama' ? 'Installed Ollama model' : 'OpenAI model ID'}<input required maxLength={150} placeholder={provider === 'ollama' ? 'gemma3:4b' : 'gpt-4.1-mini'} value={models[provider]} onChange={event => setModels({ ...models, [provider]: event.target.value })} /></label>
+                <label>{provider === 'ollama' ? 'Installed Ollama model' : `${providerNames[provider]} model ID`}<input required maxLength={150} placeholder={provider === 'ollama' ? 'gemma3:4b' : provider === 'groq' ? groqDefaultModel : 'gpt-4.1-mini'} value={models[provider]} onChange={event => setModels({ ...models, [provider]: event.target.value })} /></label>
               </div>
               {reviewDraft && <fieldset className="workflow-options">
                 <legend>Model overrides</legend>
@@ -318,8 +324,11 @@ export default function Workflows({ libraryRoot, skills, agents, openLibrary }: 
             {!draftingSkills.length && <p>Create or import a valid drafting skill to run a workflow.</p>}
             {reviewDraft && !reviewAgents.length && <p>Create a valid review agent, or turn off review for this run.</p>}
             {(missingDraft || missingReview) && <p className="action-error">A saved role is missing or invalid. Select a replacement before running.</p>}
-            {hostedSteps.length > 0 && <p className="provider-notice"><strong>OpenAI steps</strong> · {hostedSteps.join(', ')}. These steps send the brief and their role instructions{retrieveSources ? ', plus retrieved excerpts' : ''}. Hosted review and revision also receive their preceding outputs. API charges may apply.</p>}
-            <button className="primary" disabled={!ready || pending || historyLoading || recipeSaving}>{pending ? 'Running workflow…' : hostedSteps.length > 0 ? 'Run workflow with OpenAI' : 'Run workflow'}</button>
+            {hosted.map(({ destination, steps }) => <p className="provider-notice" key={destination}>
+              <strong>{providerNames[destination]} steps</strong> · {steps.join(', ')}. These steps send the brief and their role instructions{retrieveSources ? ', plus retrieved excerpts' : ''}. Hosted review and revision also receive their preceding outputs.
+              {destination === 'groq' ? <> Set <code>GROQ_API_KEY</code> before launching the app.</> : ' This recipe uses the saved OpenAI provider. Select Groq to switch it.'}
+            </p>)}
+            <button className="primary" disabled={!ready || pending || historyLoading || recipeSaving}>{pending ? 'Running workflow…' : runLabel}</button>
             {error && <p className="action-error" role="alert">{error}</p>}
           </form>
           <WorkflowRoute visibleSteps={visibleSteps} revise={revisionEnabled} retrieve={routeRetrieve} review={routeReview} />

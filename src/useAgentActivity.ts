@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import type { Provider } from './providers'
 
 export type ActivityStatus = 'running' | 'completed' | 'stopped'
-type ActivityContext = { actor: string | null; provider: 'ollama' | 'openai' | null; model: string | null }
+type ActivityContext = { actor: string | null; provider: Provider | null; model: string | null }
 export type ActivityStage = ActivityContext & {
   label: string
   status: ActivityStatus

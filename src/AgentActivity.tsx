@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { Activity, ActivityFeed, ActivityStage, ActivityStatus } from './useAgentActivity'
+import { providerNames } from './providers'
 import './Knowledge.css'
 import './AgentActivity.css'
 
@@ -17,7 +18,7 @@ function duration(start: number, end: number) {
 }
 
 function contextLine({ actor, provider, model }: Pick<ActivityStage, 'actor' | 'provider' | 'model'>, omitActor?: string) {
-  return [actor === omitActor ? null : actor, model ? provider === 'openai' ? 'OpenAI' : 'Ollama' : null, model].filter(Boolean).join(' · ')
+  return [actor === omitActor ? null : actor, model && provider ? providerNames[provider] : null, model].filter(Boolean).join(' · ')
 }
 
 function StatusBadge({ status }: { status: ActivityStatus }) {

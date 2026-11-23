@@ -25,6 +25,7 @@ pub(crate) enum RunKind {
 pub(crate) enum Provider {
     #[default]
     Ollama,
+    Groq,
     OpenAi,
 }
 
@@ -384,6 +385,7 @@ pub(crate) async fn generate(
 ) -> Result<String, String> {
     match provider {
         Provider::Ollama => super::ollama::generate(model, system, input).await,
+        Provider::Groq => super::groq::generate(model, system, input).await,
         Provider::OpenAi => super::openai::generate(model, system, input).await,
     }
 }
