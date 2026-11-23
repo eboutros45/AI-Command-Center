@@ -58,6 +58,22 @@ pub(crate) struct TestRun {
     model: String,
     input: String,
     output: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    evaluation: Option<Evaluation>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Rating {
+    MeetsExpectation,
+    NeedsWork,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Evaluation {
+    rating: Option<Rating>,
+    notes: String,
 }
 
 #[derive(Serialize)]
@@ -137,6 +153,110 @@ pub(crate) async fn list_runs(
     let app_data = app.path().app_data_dir().map_err(super::err)?;
     tauri::async_runtime::spawn_blocking(move || {
         recent_runs(&history_directory(&app_data, &library_root, "skill-runs")?)
+    })
+    .await
+    .map_err(super::err)?
+}
+
+fn load_run(directory: &Path, id: &str) -> Result<TestRun, String> {
+    if id.is_empty()
+        || id.len() > 128
+        || !id.bytes().all(|byte| byte.is_ascii_digit() || byte == b'-')
+    {
+        return Err("Invalid run ID.".into());
+    }
+    let path = directory.join(format!("{id}.json"));
+    if !path
+        .symlink_metadata()
+        .is_ok_and(|metadata| metadata.file_type().is_file())
+    {
+        return Err("This saved run could not be found.".into());
+    }
+    let run: TestRun =
+        serde_json::from_reader(fs::File::open(path).map_err(super::err)?).map_err(super::err)?;
+    if run.id != id {
+        return Err("The saved run ID does not match its file.".into());
+    }
+    Ok(run)
+}
+
+fn update_evaluation(
+    directory: &Path,
+    id: &str,
+    evaluation: Evaluation,
+) -> Result<TestRun, String> {
+    let notes = evaluation.notes.trim().to_owned();
+    if notes.chars().count() > 2_000 {
+        return Err("Keep evaluation notes under 2,000 characters.".into());
+    }
+    let mut run = load_run(directory, id)?;
+    let rating = evaluation.rating;
+    run.evaluation = if rating.is_none() && notes.is_empty() {
+        None
+    } else {
+        Some(Evaluation { rating, notes })
+    };
+    save_run(directory, &run.id, &run)?;
+    Ok(run)
+}
+
+#[tauri::command]
+pub(crate) async fn evaluate_run(
+    app: tauri::AppHandle,
+    library_root: String,
+    run_id: String,
+    evaluation: Evaluation,
+) -> Result<TestRun, String> {
+    let app_data = app.path().app_data_dir().map_err(super::err)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let directory = history_directory(&app_data, &library_root, "skill-runs")?;
+        update_evaluation(&directory, &run_id, evaluation)
+    })
+    .await
+    .map_err(super::err)?
+}
+
+fn read_baseline(selection: &Path, runs: &Path) -> Result<Option<TestRun>, String> {
+    let file = match fs::File::open(selection.join("baseline.json")) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(super::err(error)),
+    };
+    let id: Option<String> = serde_json::from_reader(file).map_err(super::err)?;
+    id.as_deref().map(|id| load_run(runs, id)).transpose()
+}
+
+#[tauri::command]
+pub(crate) async fn get_run_baseline(
+    app: tauri::AppHandle,
+    library_root: String,
+) -> Result<Option<TestRun>, String> {
+    let app_data = app.path().app_data_dir().map_err(super::err)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let selection = history_directory(&app_data, &library_root, "skill-evaluations")?;
+        let runs = history_directory(&app_data, &library_root, "skill-runs")?;
+        read_baseline(&selection, &runs)
+    })
+    .await
+    .map_err(super::err)?
+}
+
+#[tauri::command]
+pub(crate) async fn set_run_baseline(
+    app: tauri::AppHandle,
+    library_root: String,
+    run_id: Option<String>,
+) -> Result<Option<TestRun>, String> {
+    let app_data = app.path().app_data_dir().map_err(super::err)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let selection = history_directory(&app_data, &library_root, "skill-evaluations")?;
+        let runs = history_directory(&app_data, &library_root, "skill-runs")?;
+        let run = run_id
+            .as_deref()
+            .map(|id| load_run(&runs, id))
+            .transpose()?;
+        save_run(&selection, "baseline", &run_id)?;
+        Ok(run)
     })
     .await
     .map_err(super::err)?
@@ -325,6 +445,7 @@ pub(crate) async fn run_test(
         model,
         input,
         output,
+        evaluation: None,
     };
     tauri::async_runtime::spawn_blocking(move || {
         let save_error = save_run(&directory, &run.id, &run).err();
@@ -422,9 +543,37 @@ mod tests {
                     model: "gpt-4.1-mini".into(),
                     input: "First draft".into(),
                     output: "First review".into(),
+                    evaluation: None,
                 };
                 save_run(&directory, &run.id, &run)?;
                 fs::write(directory.join("incomplete.tmp"), "{").map_err(super::super::err)?;
+                let selection = directory.join("selection");
+                save_run(&selection, "baseline", &Some("001"))?;
+                let baseline = update_evaluation(
+                    &directory,
+                    "001",
+                    Evaluation {
+                        rating: Some(Rating::NeedsWork),
+                        notes: "Add a source citation.".into(),
+                    },
+                )?;
+                if baseline.fingerprint != "first-fingerprint" || baseline.output != "First review"
+                {
+                    return Err("Evaluation changed the original run snapshot.".into());
+                }
+                let pinned =
+                    read_baseline(&selection, &directory)?.ok_or("Baseline was missing")?;
+                if pinned.id != "001"
+                    || pinned
+                        .evaluation
+                        .as_ref()
+                        .is_none_or(|evaluation| evaluation.notes != "Add a source citation.")
+                {
+                    return Err("The saved baseline did not reopen with its evaluation.".into());
+                }
+                if load_run(&directory, "../001").is_ok() {
+                    return Err("A run ID was accepted as a path.".into());
+                }
                 recent_runs(&directory)
             };
         let history = exercise();

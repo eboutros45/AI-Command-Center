@@ -54,6 +54,8 @@ Retrieval uses keywords and reads the current files on each search. Generation s
 
 Open a saved skill or agent and select **Test saved skill** or **Test saved agent**. Choose a provider, enter an example, and run it. Agent previews include the saved content of referenced skills and use the model selected for the test. Previews generate text only. Recent runs record the input, output, provider, model, and source snapshots on this device.
 
+Rate a saved run or add evaluation notes, then choose **Set as baseline** to keep it as your library's comparison reference. Use **Use baseline input** to run the same example again. Select another result to compare outputs, notes, models, and saved instructions side by side.
+
 For OpenAI, supply `OPENAI_API_KEY` in the environment that starts the desktop app. In PowerShell 5.1, enter the key at a masked prompt and start the app in the same window.
 
 ```powershell

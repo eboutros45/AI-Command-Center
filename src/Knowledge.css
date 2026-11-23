@@ -46,6 +46,10 @@
 .workflow-options .workflow-plan { padding: 6px 8px; border-radius: 5px; background: var(--green-soft); color: var(--green); }
 .step-model { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .workflow-steps .workflow-model { font-size: 11px; font-weight: 650; }
+.run-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.run-compare-pane { min-width: 0; border: 1px solid var(--line); border-radius: 7px; padding: 12px; background: var(--paper); overflow-wrap: anywhere; }
+.run-compare-pane h4 { margin: 0 0 7px; }
+.run-compare-pane pre { max-height: 320px; overflow: auto; }
 .workflow-route { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .workflow-route > div { display: flex; align-items: center; gap: 10px; }
 .workflow-route a { padding: 6px 8px; border-radius: 6px; background: var(--paper); color: var(--ink); font-size: 12px; }
