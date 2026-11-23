@@ -71,3 +71,5 @@ Open **Workflows**, enter a proposal brief and a document folder, then provide s
 Save the setup as a named **Recipe** to reuse it with a fresh brief. Recipes belong to the selected library. The workflow route shows whether the review passed, requested changes, or stopped.
 
 Use **Steps for the next run** to turn document retrieval or agent review on or off. A brief-only draft needs just a drafting skill and a model. With review enabled, you can also choose whether review feedback triggers one revision. These choices are saved with the recipe and the run.
+
+Use **Model overrides** to give review or revision its own model and provider. Each step uses the drafting model unless you set an override. The run trace records the provider and model for each model call.
