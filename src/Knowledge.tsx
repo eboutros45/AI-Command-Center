@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { groqDefaultModel, modelSettings, type CurrentProvider } from './providers'
+import { groqDefaultModel, modelSettings, preferredGroqModel, type CurrentProvider } from './providers'
 import './Knowledge.css'
 
 type Excerpt = { path: string; startLine: number; endLine: number; text: string }
@@ -21,7 +21,7 @@ export default function Knowledge({ libraryRoot, skills, desktop }: {
   const [provider, setProvider] = useState<CurrentProvider>('ollama')
   const [models, setModels] = useState(() => ({
     ollama: localStorage.getItem(modelSettings.ollama) ?? '',
-    groq: localStorage.getItem(modelSettings.groq) ?? groqDefaultModel,
+    groq: preferredGroqModel(),
   }))
   const model = models[provider]
   const [skillPath, setSkillPath] = useState('')

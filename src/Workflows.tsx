@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Channel, invoke } from '@tauri-apps/api/core'
-import { groqDefaultModel, modelSettings, providerNames, type Provider } from './providers'
+import { groqDefaultModel, preferredGroqModel, providerNames, type Provider } from './providers'
 import './Knowledge.css'
 
 type Stage = 'retrieve' | 'draft' | 'review' | 'revise'
@@ -122,7 +122,7 @@ export default function Workflows({ libraryRoot, skills, agents, openLibrary }: 
   const [reviewDraft, setReviewDraft] = useState(true)
   const [models, setModels] = useState(() => ({
     ollama: localStorage.getItem('knowledgeModel') ?? '',
-    groq: localStorage.getItem(modelSettings.groq) ?? groqDefaultModel,
+    groq: preferredGroqModel(),
     openai: localStorage.getItem('testOpenAiModel') ?? 'gpt-4.1-mini',
   }))
   const [runs, setRuns] = useState<ProposalRun[]>([])

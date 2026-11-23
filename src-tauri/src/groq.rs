@@ -75,11 +75,18 @@ pub(crate) async fn generate(model: &str, system: &str, input: &str) -> Result<S
                 "Groq rejected the key. Check GROQ_API_KEY and restart Command Center.".into(),
             );
         }
-        403 | 404 => {
-            return Err(
-                "Groq denied access to this model. Check the model ID and project permissions."
-                    .into(),
-            );
+        400 | 403 | 404 if model == "llama-3.3-70b-versatile" => {
+            return Err("Groq retired llama-3.3-70b-versatile for Free and Developer plans. Try openai/gpt-oss-120b with the same Groq API key.".into());
+        }
+        403 => {
+            return Err(format!(
+                "Groq denied access to {model} (HTTP 403). Check the model permissions for the project that owns your key."
+            ));
+        }
+        404 => {
+            return Err(format!(
+                "Groq could not find {model} (HTTP 404). Check the model ID in the Groq model list."
+            ));
         }
         429 => return Err("Groq rate limited the request or the project is out of quota.".into()),
         status if !response.status().is_success() => {

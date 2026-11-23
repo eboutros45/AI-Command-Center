@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { groqDefaultModel, modelSettings, providerNames, type CurrentProvider, type Provider } from './providers'
+import { groqDefaultModel, modelSettings, preferredGroqModel, providerNames, type CurrentProvider, type Provider } from './providers'
 import './Knowledge.css'
 
 type RunKind = 'skill' | 'agent'
@@ -94,7 +94,7 @@ export default function RunAndTest({ libraryRoot, initialAsset, skills, agents, 
   const [provider, setProvider] = useState<CurrentProvider>('ollama')
   const [models, setModels] = useState(() => ({
     ollama: localStorage.getItem('knowledgeModel') ?? '',
-    groq: localStorage.getItem(modelSettings.groq) ?? groqDefaultModel,
+    groq: preferredGroqModel(),
   }))
   const [input, setInput] = useState('')
   const inputField = useRef<HTMLTextAreaElement>(null)
