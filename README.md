@@ -29,7 +29,7 @@ Install Git, Node.js LTS, Rust with the MSVC toolchain, Microsoft C++ Build Tool
 - Choose one local library root and browse its physical folder hierarchy.
 - Create category folders and valid `SKILL.md` packages.
 - Import complete skill folders without altering their source.
-- Create Claude Code agents with a model preference, tool allowlist, role template, and preloaded library skills.
+- Create Claude Code agents with guided role, folder, tool, and skill selection, then preview the exact Markdown before saving.
 - Switch between Skills and Agents studios with physical categories for each.
 - Search, inspect, edit, explicitly save, and validate canonical Markdown source.
 - Run provider-free quality checks for activation conditions, process, constraints, output contracts, placeholders, and Claude compatibility.

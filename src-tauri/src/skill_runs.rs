@@ -179,7 +179,7 @@ fn read_skill_snapshot(root: &str, path: &str) -> Result<AssetSnapshot, String> 
     })
 }
 
-fn referenced_skill<'a>(
+pub(crate) fn referenced_skill<'a>(
     reference: &str,
     skills: &'a [super::Skill],
 ) -> Result<&'a super::Skill, String> {

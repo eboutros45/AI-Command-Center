@@ -8,6 +8,7 @@ use std::{
 };
 use walkdir::WalkDir;
 
+mod agent_creator;
 mod knowledge;
 mod ollama;
 mod openai;
@@ -713,64 +714,6 @@ fn agent_template_body(template: Option<&str>, name: &str) -> String {
     }
 }
 
-#[tauri::command]
-fn create_agent(
-    root: String,
-    category: String,
-    name: String,
-    description: String,
-    model: String,
-    tools: Vec<String>,
-    skills: Vec<String>,
-    template: Option<String>,
-) -> Result<AgentSummary, String> {
-    let root = canonical_dir(Path::new(&root))?;
-    let category = safe_relative(&category)?;
-    let filename = format!("{}.md", slug(&name)?);
-    let agent_root = root.join("agents");
-    fs::create_dir_all(&agent_root).map_err(err)?;
-    let agent_root = canonical_dir(&agent_root)?;
-    let parent = authorized_relative_dir(&agent_root, &category)?;
-    let destination = parent.join(filename);
-    if destination.exists() {
-        return Err("An agent with that filename already exists".into());
-    }
-    let safe_name = name.replace(['\n', '\r'], " ");
-    if safe_name.starts_with('-') || safe_name.contains(':') || safe_name.len() > 256 {
-        return Err(
-            "Agent name cannot start with '-', contain ':', or exceed 256 characters".into(),
-        );
-    }
-    let model = if model.trim().is_empty() {
-        "inherit".to_string()
-    } else {
-        model.trim().to_string()
-    };
-    if !valid_agent_model(&model) {
-        return Err(format!("Unsupported Claude model value: {model}"));
-    }
-    let frontmatter = AgentFrontmatter {
-        name: Some(safe_name.clone()),
-        description: Some(description.replace(['\n', '\r'], " ")),
-        model: Some(model),
-        tools: tools
-            .into_iter()
-            .map(|tool| tool.trim().to_string())
-            .filter(|tool| !tool.is_empty())
-            .collect(),
-        skills: skills
-            .into_iter()
-            .map(|skill| skill.trim().to_string())
-            .filter(|skill| !skill.is_empty())
-            .collect(),
-    };
-    let yaml = serde_yaml::to_string(&frontmatter)
-        .map_err(|error| format!("Could not serialize agent frontmatter: {error}"))?;
-    let body = agent_template_body(template.as_deref(), &safe_name);
-    fs::write(&destination, format!("---\n{yaml}---\n\n{body}")).map_err(err)?;
-    Ok(inspect_agent(&agent_root, &destination))
-}
-
 fn create_agent_at(
     root: &Path,
     category: &Path,
@@ -1224,7 +1167,8 @@ pub fn run() {
             create_skill,
             seed_starter_skills,
             seed_starter_agents,
-            create_agent,
+            agent_creator::preview_agent,
+            agent_creator::create_agent,
             read_agent,
             save_agent,
             install_agent,
